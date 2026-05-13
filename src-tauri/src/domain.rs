@@ -96,7 +96,11 @@ pub enum Solvent {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "SCREAMING_SNAKE_CASE",
+    rename_all_fields = "camelCase"
+)]
 pub enum Command {
     SetMethod { method: Method },
     SetBasis { basis: Basis },
@@ -104,6 +108,9 @@ pub enum Command {
     SetSolvent { solvent: Option<Solvent> },
     SetCharge { charge: i32 },
     SetMultiplicity { multiplicity: u32 },
+    SetBondLength { atom_ids: [u32; 2], length: f64 },
+    SetBondAngle { atom_ids: [u32; 3], angle: f64 },
+    SetDihedralAngle { atom_ids: [u32; 4], angle: f64 },
     SetMolecule { molecule: Molecule },
     ToggleAtomSelection { atom_id: u32 },
     ClearSelection,
@@ -114,6 +121,40 @@ pub enum Command {
 pub struct ValidationMessage {
     pub level: ValidationLevel,
     pub message: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AtomSummary {
+    pub id: u32,
+    pub element: String,
+    pub position: [f64; 3],
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalculationSummary {
+    pub job_type: JobType,
+    pub method: Method,
+    pub basis: Basis,
+    pub solvent: Option<Solvent>,
+    pub charge: i32,
+    pub multiplicity: u32,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiContext {
+    pub selected_atoms: Vec<AtomSummary>,
+    pub calculation: CalculationSummary,
+    pub screenshot: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiResult {
+    pub commands: Vec<Command>,
+    pub explanation: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -179,11 +220,22 @@ pub fn reduce(mut state: AppState, command: Command) -> AppState {
     match command {
         Command::SetMethod { method } => state.domain.chemical_spec.calculation.method = method,
         Command::SetBasis { basis } => state.domain.chemical_spec.calculation.basis = basis,
-        Command::SetJobType { job_type } => state.domain.chemical_spec.calculation.job_type = job_type,
+        Command::SetJobType { job_type } => {
+            state.domain.chemical_spec.calculation.job_type = job_type
+        }
         Command::SetSolvent { solvent } => state.domain.chemical_spec.calculation.solvent = solvent,
         Command::SetCharge { charge } => state.domain.chemical_spec.calculation.charge = charge,
         Command::SetMultiplicity { multiplicity } => {
             state.domain.chemical_spec.calculation.multiplicity = multiplicity
+        }
+        Command::SetBondLength { atom_ids, length } => {
+            set_bond_length(&mut state.domain.chemical_spec.molecule, atom_ids, length);
+        }
+        Command::SetBondAngle { atom_ids, angle } => {
+            set_bond_angle(&mut state.domain.chemical_spec.molecule, atom_ids, angle);
+        }
+        Command::SetDihedralAngle { atom_ids, angle } => {
+            set_dihedral_angle(&mut state.domain.chemical_spec.molecule, atom_ids, angle);
         }
         Command::SetMolecule { molecule } => {
             state.domain.chemical_spec.molecule = molecule;
@@ -214,7 +266,11 @@ pub fn render_gaussian(spec: &ChemicalSpec) -> String {
     let molecule = &spec.molecule;
     let mut route = vec![
         route_job(calculation.job_type).to_string(),
-        format!("{}/{}", method_name(calculation.method), basis_name(calculation.basis)),
+        format!(
+            "{}/{}",
+            method_name(calculation.method),
+            basis_name(calculation.basis)
+        ),
     ];
     if let Some(solvent) = calculation.solvent {
         route.push(format!("SCRF=(Solvent={})", solvent_name(solvent)));
@@ -272,6 +328,126 @@ pub fn validate_chemical_spec(spec: &ChemicalSpec) -> Vec<ValidationMessage> {
     }
 
     messages
+}
+
+pub fn build_ai_context(state: &AppState, screenshot: Option<String>) -> AiContext {
+    let molecule = &state.domain.chemical_spec.molecule;
+    let calculation = &state.domain.chemical_spec.calculation;
+    let selected_atoms = state
+        .ui
+        .selected_atoms
+        .iter()
+        .filter_map(|atom_id| molecule.atoms.iter().find(|atom| atom.id == *atom_id))
+        .map(|atom| AtomSummary {
+            id: atom.id,
+            element: atom.element.clone(),
+            position: atom.position,
+        })
+        .collect::<Vec<_>>();
+
+    AiContext {
+        selected_atoms,
+        calculation: CalculationSummary {
+            job_type: calculation.job_type,
+            method: calculation.method,
+            basis: calculation.basis,
+            solvent: calculation.solvent,
+            charge: calculation.charge,
+            multiplicity: calculation.multiplicity,
+        },
+        screenshot,
+    }
+}
+
+pub fn propose_ai_commands(input: &str, context: &AiContext) -> AiResult {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return AiResult {
+            commands: Vec::new(),
+            explanation: "No request was provided.".to_string(),
+        };
+    }
+
+    if let Some(result) = parse_json_ai_result(trimmed) {
+        return result;
+    }
+
+    let normalized = trimmed.to_ascii_lowercase();
+    let mut commands = Vec::new();
+
+    if normalized.contains("b3lyp") {
+        commands.push(Command::SetMethod {
+            method: Method::B3LYP,
+        });
+    }
+    if normalized.contains("wb97xd") || normalized.contains("wB97XD") {
+        commands.push(Command::SetMethod {
+            method: Method::WB97XD,
+        });
+    }
+
+    if normalized.contains("6-31g(d)") {
+        commands.push(Command::SetBasis {
+            basis: Basis::Six31Gd,
+        });
+    }
+    if normalized.contains("def2-svp") {
+        commands.push(Command::SetBasis {
+            basis: Basis::Def2Svp,
+        });
+    }
+    if normalized.contains("def2-tzvp") {
+        commands.push(Command::SetBasis {
+            basis: Basis::Def2Tzvp,
+        });
+    }
+
+    if normalized.contains("thf") {
+        commands.push(Command::SetSolvent {
+            solvent: Some(Solvent::THF),
+        });
+    }
+    if normalized.contains("water") {
+        commands.push(Command::SetSolvent {
+            solvent: Some(Solvent::Water),
+        });
+    }
+    if normalized.contains("no solvent") || normalized.contains("gas phase") {
+        commands.push(Command::SetSolvent { solvent: None });
+    }
+
+    if let Some(job_type) = infer_job_type(&normalized) {
+        commands.push(Command::SetJobType { job_type });
+    }
+    if let Some(charge) = parse_number_after(&normalized, "charge") {
+        commands.push(Command::SetCharge { charge });
+    }
+    if let Some(multiplicity) = parse_number_after(&normalized, "multiplicity")
+        .or_else(|| parse_number_after(&normalized, "mult"))
+        .and_then(|value| u32::try_from(value).ok())
+    {
+        commands.push(Command::SetMultiplicity { multiplicity });
+    }
+    if let Some(command) = infer_geometry_command(&normalized, context) {
+        commands.push(command);
+    }
+
+    let unique_commands = dedupe_ai_commands(commands);
+    let explanation = if unique_commands.is_empty() {
+        "No supported changes were found. Try mentioning method, basis, job type, solvent, charge, multiplicity, bond length, bond angle, or dihedral angle."
+            .to_string()
+    } else {
+        format!(
+            "Proposed {} command(s) from the request. Current method is {}.",
+            unique_commands.len(),
+            method_name(context.calculation.method)
+        )
+    };
+
+    AiResult {
+        commands: unique_commands,
+        explanation,
+    }
 }
 
 fn parse_xyz(file_name: &str, text: &str) -> Result<Molecule, String> {
@@ -354,7 +530,12 @@ fn parse_mol(file_name: &str, text: &str) -> Result<Molecule, String> {
     }
 
     let mut bonds = Vec::with_capacity(bond_count);
-    for (index, line) in lines.iter().skip(4 + atom_count).take(bond_count).enumerate() {
+    for (index, line) in lines
+        .iter()
+        .skip(4 + atom_count)
+        .take(bond_count)
+        .enumerate()
+    {
         let parts = line.split_whitespace().collect::<Vec<_>>();
         if parts.len() < 3 {
             return Err(format!("Invalid MOL bond line {}.", index + atom_count + 5));
@@ -390,7 +571,8 @@ fn infer_bonds(atoms: &[Atom]) -> Vec<Bond> {
         for second_index in (first_index + 1)..atoms.len() {
             let first = &atoms[first_index];
             let second = &atoms[second_index];
-            let threshold = covalent_radius(&first.element) + covalent_radius(&second.element) + 0.45;
+            let threshold =
+                covalent_radius(&first.element) + covalent_radius(&second.element) + 0.45;
             if distance(first.position, second.position) <= threshold {
                 bonds.push(Bond {
                     id: (bonds.len() + 1) as u32,
@@ -403,8 +585,318 @@ fn infer_bonds(atoms: &[Atom]) -> Vec<Bond> {
     bonds
 }
 
+fn parse_json_ai_result(text: &str) -> Option<AiResult> {
+    let parsed = serde_json::from_str::<AiResult>(text).ok()?;
+    let commands = parsed
+        .commands
+        .into_iter()
+        .filter(is_ai_command)
+        .collect::<Vec<_>>();
+    Some(AiResult {
+        commands,
+        explanation: if parsed.explanation.is_empty() {
+            "Parsed JSON commands.".to_string()
+        } else {
+            parsed.explanation
+        },
+    })
+}
+
+fn is_ai_command(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::SetMethod { .. }
+            | Command::SetBasis { .. }
+            | Command::SetJobType { .. }
+            | Command::SetSolvent { .. }
+            | Command::SetCharge { .. }
+            | Command::SetMultiplicity { .. }
+            | Command::SetBondLength { .. }
+            | Command::SetBondAngle { .. }
+            | Command::SetDihedralAngle { .. }
+    )
+}
+
+fn infer_job_type(text: &str) -> Option<JobType> {
+    if text.contains("transition state") || text.split_whitespace().any(|token| token == "ts") {
+        return Some(JobType::Ts);
+    }
+
+    let has_opt =
+        text.contains("opt") || text.contains("optimize") || text.contains("optimization");
+    let has_freq = text.contains("freq") || text.contains("frequency");
+    match (has_opt, has_freq) {
+        (true, true) => Some(JobType::OptFreq),
+        (true, false) => Some(JobType::Opt),
+        (false, true) => Some(JobType::Freq),
+        (false, false) => None,
+    }
+}
+
+fn parse_number_after(text: &str, keyword: &str) -> Option<i32> {
+    let words = text.split_whitespace().collect::<Vec<_>>();
+    for (index, word) in words.iter().enumerate() {
+        if *word == keyword {
+            let next = words.get(index + 1)?;
+            let numeric = next.trim_matches(|char: char| char == ':' || char == '=' || char == ',');
+            if let Ok(value) = numeric.parse::<i32>() {
+                return Some(value);
+            }
+        }
+
+        if let Some(rest) = word.strip_prefix(keyword) {
+            let numeric = rest.trim_matches(|char: char| char == ':' || char == '=' || char == ',');
+            if !numeric.is_empty() {
+                if let Ok(value) = numeric.parse::<i32>() {
+                    return Some(value);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn infer_geometry_command(text: &str, context: &AiContext) -> Option<Command> {
+    let value = parse_geometry_value(text)?;
+    let selected = context
+        .selected_atoms
+        .iter()
+        .map(|atom| atom.id)
+        .collect::<Vec<_>>();
+
+    if (text.contains("dihedral") || text.contains("torsion")) && selected.len() >= 4 {
+        return Some(Command::SetDihedralAngle {
+            atom_ids: [selected[0], selected[1], selected[2], selected[3]],
+            angle: value,
+        });
+    }
+    if (text.contains("bond angle") || text.contains("angle")) && selected.len() >= 3 {
+        return Some(Command::SetBondAngle {
+            atom_ids: [selected[0], selected[1], selected[2]],
+            angle: value,
+        });
+    }
+    if (text.contains("bond length") || text.contains("distance")) && selected.len() >= 2 {
+        return Some(Command::SetBondLength {
+            atom_ids: [selected[0], selected[1]],
+            length: value,
+        });
+    }
+
+    None
+}
+
+fn parse_geometry_value(text: &str) -> Option<f64> {
+    text.split_whitespace()
+        .filter_map(|word| {
+            word.trim_matches(|char: char| {
+                matches!(
+                    char,
+                    ':' | '=' | ',' | ';' | '(' | ')' | '[' | ']' | 'a' | 'A' | '°'
+                )
+            })
+            .parse::<f64>()
+            .ok()
+        })
+        .last()
+}
+
+fn dedupe_ai_commands(commands: Vec<Command>) -> Vec<Command> {
+    let mut unique = Vec::new();
+    let mut method = None;
+    let mut basis = None;
+    let mut job_type = None;
+    let mut solvent = None;
+    let mut charge = None;
+    let mut multiplicity = None;
+
+    for command in commands {
+        match command {
+            Command::SetMethod { .. } => method = Some(command),
+            Command::SetBasis { .. } => basis = Some(command),
+            Command::SetJobType { .. } => job_type = Some(command),
+            Command::SetSolvent { .. } => solvent = Some(command),
+            Command::SetCharge { .. } => charge = Some(command),
+            Command::SetMultiplicity { .. } => multiplicity = Some(command),
+            Command::SetBondLength { .. }
+            | Command::SetBondAngle { .. }
+            | Command::SetDihedralAngle { .. } => unique.push(command),
+            Command::SetMolecule { .. }
+            | Command::ToggleAtomSelection { .. }
+            | Command::ClearSelection => {}
+        }
+    }
+
+    unique.extend(
+        [method, basis, job_type, solvent, charge, multiplicity]
+            .into_iter()
+            .flatten(),
+    );
+    unique
+}
+
+fn set_bond_length(molecule: &mut Molecule, atom_ids: [u32; 2], length: f64) {
+    if !length.is_finite() || length <= 0.0 {
+        return;
+    }
+    let Some(anchor) = atom_position(molecule, atom_ids[0]) else {
+        return;
+    };
+    let Some(moving_index) = atom_index(molecule, atom_ids[1]) else {
+        return;
+    };
+    let direction = sub(molecule.atoms[moving_index].position, anchor);
+    let Some(unit) = normalize(direction) else {
+        return;
+    };
+    molecule.atoms[moving_index].position = add(anchor, scale(unit, length));
+}
+
+fn set_bond_angle(molecule: &mut Molecule, atom_ids: [u32; 3], angle: f64) {
+    if !angle.is_finite() || !(0.0..=180.0).contains(&angle) {
+        return;
+    }
+    let Some(first) = atom_position(molecule, atom_ids[0]) else {
+        return;
+    };
+    let Some(center) = atom_position(molecule, atom_ids[1]) else {
+        return;
+    };
+    let Some(moving_index) = atom_index(molecule, atom_ids[2]) else {
+        return;
+    };
+    let moving = molecule.atoms[moving_index].position;
+    let Some(axis_to_first) = normalize(sub(first, center)) else {
+        return;
+    };
+    let moving_vector = sub(moving, center);
+    let moving_length = length(moving_vector);
+    if moving_length <= f64::EPSILON {
+        return;
+    }
+
+    let projected = sub(
+        moving_vector,
+        scale(axis_to_first, dot(moving_vector, axis_to_first)),
+    );
+    let side = normalize(projected).unwrap_or_else(|| perpendicular(axis_to_first));
+    let radians = angle.to_radians();
+    let new_vector = scale(
+        add(
+            scale(axis_to_first, radians.cos()),
+            scale(side, radians.sin()),
+        ),
+        moving_length,
+    );
+    molecule.atoms[moving_index].position = add(center, new_vector);
+}
+
+fn set_dihedral_angle(molecule: &mut Molecule, atom_ids: [u32; 4], angle: f64) {
+    if !angle.is_finite() {
+        return;
+    }
+    let Some(first) = atom_position(molecule, atom_ids[0]) else {
+        return;
+    };
+    let Some(second) = atom_position(molecule, atom_ids[1]) else {
+        return;
+    };
+    let Some(third) = atom_position(molecule, atom_ids[2]) else {
+        return;
+    };
+    let Some(moving_index) = atom_index(molecule, atom_ids[3]) else {
+        return;
+    };
+    let moving = molecule.atoms[moving_index].position;
+    let Some(current) = dihedral_degrees(first, second, third, moving) else {
+        return;
+    };
+    let delta = (angle - current).to_radians();
+    let Some(axis) = normalize(sub(third, second)) else {
+        return;
+    };
+    molecule.atoms[moving_index].position = add(third, rotate(sub(moving, third), axis, delta));
+}
+
+fn atom_index(molecule: &Molecule, atom_id: u32) -> Option<usize> {
+    molecule.atoms.iter().position(|atom| atom.id == atom_id)
+}
+
+fn atom_position(molecule: &Molecule, atom_id: u32) -> Option<[f64; 3]> {
+    molecule
+        .atoms
+        .iter()
+        .find(|atom| atom.id == atom_id)
+        .map(|atom| atom.position)
+}
+
 fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+}
+
+fn dihedral_degrees(a: [f64; 3], b: [f64; 3], c: [f64; 3], d: [f64; 3]) -> Option<f64> {
+    let b0 = sub(b, a);
+    let b1 = sub(c, b);
+    let b2 = sub(d, c);
+    let n1 = normalize(cross(b0, b1))?;
+    let n2 = normalize(cross(b1, b2))?;
+    let m1 = cross(n1, normalize(b1)?);
+    Some(dot(m1, n2).atan2(dot(n1, n2)).to_degrees())
+}
+
+fn add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn scale(vector: [f64; 3], scalar: f64) -> [f64; 3] {
+    [vector[0] * scalar, vector[1] * scalar, vector[2] * scalar]
+}
+
+fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn length(vector: [f64; 3]) -> f64 {
+    dot(vector, vector).sqrt()
+}
+
+fn normalize(vector: [f64; 3]) -> Option<[f64; 3]> {
+    let vector_length = length(vector);
+    if vector_length <= f64::EPSILON {
+        None
+    } else {
+        Some(scale(vector, 1.0 / vector_length))
+    }
+}
+
+fn rotate(vector: [f64; 3], axis: [f64; 3], radians: f64) -> [f64; 3] {
+    let cos = radians.cos();
+    let sin = radians.sin();
+    add(
+        add(scale(vector, cos), scale(cross(axis, vector), sin)),
+        scale(axis, dot(axis, vector) * (1.0 - cos)),
+    )
+}
+
+fn perpendicular(vector: [f64; 3]) -> [f64; 3] {
+    let candidate = if vector[0].abs() < 0.9 {
+        [1.0, 0.0, 0.0]
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+    normalize(cross(vector, candidate)).unwrap_or([0.0, 0.0, 1.0])
 }
 
 fn covalent_radius(element: &str) -> f64 {
@@ -514,5 +1006,77 @@ fn warning(message: &str) -> ValidationMessage {
     ValidationMessage {
         level: ValidationLevel::Warning,
         message: message.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn atom_position_for(state: &AppState, atom_id: u32) -> [f64; 3] {
+        state
+            .domain
+            .chemical_spec
+            .molecule
+            .atoms
+            .iter()
+            .find(|atom| atom.id == atom_id)
+            .expect("atom should exist")
+            .position
+    }
+
+    #[test]
+    fn deserializes_geometry_commands_from_frontend_shape() {
+        let command: Command =
+            serde_json::from_str(r#"{"type":"SET_BOND_LENGTH","atomIds":[1,2],"length":1.42}"#)
+                .expect("command should deserialize");
+
+        assert!(matches!(
+            command,
+            Command::SetBondLength {
+                atom_ids: [1, 2],
+                length
+            } if (length - 1.42).abs() < 1e-12
+        ));
+    }
+
+    #[test]
+    fn bond_length_command_updates_coordinates() {
+        let state = reduce(
+            initial_app_state(),
+            Command::SetBondLength {
+                atom_ids: [1, 2],
+                length: 1.42,
+            },
+        );
+
+        assert!((distance(atom_position_for(&state, 1), atom_position_for(&state, 2)) - 1.42).abs() < 1e-9);
+    }
+
+    #[test]
+    fn bond_angle_command_updates_coordinates() {
+        let state = reduce(
+            initial_app_state(),
+            Command::SetBondAngle {
+                atom_ids: [2, 1, 3],
+                angle: 120.0,
+            },
+        );
+        let first = atom_position_for(&state, 2);
+        let center = atom_position_for(&state, 1);
+        let third = atom_position_for(&state, 3);
+        let measured = angle_degrees(first, center, third).expect("angle should be measurable");
+
+        assert!((measured - 120.0).abs() < 1e-9);
+    }
+
+    fn angle_degrees(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> Option<f64> {
+        let ba = sub(a, b);
+        let bc = sub(c, b);
+        let denominator = length(ba) * length(bc);
+        if denominator <= f64::EPSILON {
+            return None;
+        }
+        Some((dot(ba, bc) / denominator).clamp(-1.0, 1.0).acos().to_degrees())
     }
 }

@@ -3,8 +3,7 @@ import { createViewer, type AtomSpec, type GLViewer } from "3dmol";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 import { useAppStore } from "./app/store";
-import { buildAIContext } from "./ai/contextBuilder";
-import { proposeCommands, type AIResult } from "./ai/aiClient";
+import type { AIResult } from "./domain/commands";
 import {
   supportedBases,
   supportedJobTypes,
@@ -127,12 +126,12 @@ function MoleculeViewer() {
     viewer.setStyle({}, { stick: { radius: 0.15 }, sphere: { scale: 0.34 } });
     for (const atomId of selected) {
       viewer.setStyle(
-        { serial: atomId },
+        { index: atomId - 1 },
         { stick: { radius: 0.2, color: "#c27a22" }, sphere: { scale: 0.46, color: "#f4b13d" } },
       );
     }
     viewer.setClickable({}, true, (atom: AtomSpec) => {
-      const atomId = atom.serial ?? (atom.index === undefined ? undefined : atom.index + 1);
+      const atomId = atom.index === undefined ? atom.serial : atom.index + 1;
       if (atomId !== undefined) void dispatchCommand({ type: "TOGGLE_ATOM_SELECTION", atomId });
     });
     viewer.zoomTo();
@@ -219,6 +218,8 @@ function CalculationForm({ messages }: { messages: ValidationMessage[] }) {
         />
       </div>
 
+      <GeometryEditor />
+
       <div className="validation-list">
         {messages.length === 0 ? (
           <p className="valid">Ready to render Gaussian input.</p>
@@ -231,6 +232,124 @@ function CalculationForm({ messages }: { messages: ValidationMessage[] }) {
         )}
       </div>
     </section>
+  );
+}
+
+function GeometryEditor() {
+  const { state, dispatchCommand } = useAppStore();
+  const [bondLength, setBondLength] = useState("");
+  const [bondAngle, setBondAngle] = useState("");
+  const [dihedralAngle, setDihedralAngle] = useState("");
+  const molecule = state?.domain.chemicalSpec.molecule;
+  const selected = state?.ui.selectedAtoms ?? [];
+  const bondAtomIds = selected.length >= 2 ? ([selected[0], selected[1]] as [number, number]) : null;
+  const angleAtomIds = selected.length >= 3 ? ([selected[0], selected[1], selected[2]] as [number, number, number]) : null;
+  const dihedralAtomIds =
+    selected.length >= 4 ? ([selected[0], selected[1], selected[2], selected[3]] as [number, number, number, number]) : null;
+
+  useEffect(() => {
+    if (!molecule) return;
+    const lengthValue = selected.length >= 2 ? measureBondLength(molecule, selected[0], selected[1]) : undefined;
+    const angleValue = selected.length >= 3 ? measureBondAngle(molecule, selected[0], selected[1], selected[2]) : undefined;
+    const dihedralValue =
+      selected.length >= 4 ? measureDihedralAngle(molecule, selected[0], selected[1], selected[2], selected[3]) : undefined;
+    setBondLength(formatMeasure(lengthValue));
+    setBondAngle(formatMeasure(angleValue));
+    setDihedralAngle(formatMeasure(dihedralValue));
+  }, [molecule, selected]);
+
+  if (!state) return null;
+
+  return (
+    <div className="geometry-editor" aria-label="Geometry edit menu">
+      <div className="geometry-heading">
+        <h3>Geometry Edit</h3>
+        <span>Select 2, 3, or 4 atoms in order</span>
+      </div>
+      <div className="geometry-grid">
+        <label>
+          Bond length
+          <div className="inline-field">
+            <input
+              type="number"
+              step="0.001"
+              min="0.001"
+              value={bondLength}
+              disabled={selected.length < 2}
+              onChange={(event) => setBondLength(event.currentTarget.value)}
+            />
+            <button
+              type="button"
+              disabled={selected.length < 2 || !Number.isFinite(Number(bondLength)) || Number(bondLength) <= 0}
+              onClick={() =>
+                bondAtomIds &&
+                void dispatchCommand({
+                  type: "SET_BOND_LENGTH",
+                  atomIds: bondAtomIds,
+                  length: Number(bondLength),
+                })
+              }
+            >
+              Apply
+            </button>
+          </div>
+        </label>
+        <label>
+          Bond angle
+          <div className="inline-field">
+            <input
+              type="number"
+              step="0.1"
+              min="0"
+              max="180"
+              value={bondAngle}
+              disabled={selected.length < 3}
+              onChange={(event) => setBondAngle(event.currentTarget.value)}
+            />
+            <button
+              type="button"
+              disabled={selected.length < 3 || !isAngleInput(bondAngle)}
+              onClick={() =>
+                angleAtomIds &&
+                void dispatchCommand({
+                  type: "SET_BOND_ANGLE",
+                  atomIds: angleAtomIds,
+                  angle: Number(bondAngle),
+                })
+              }
+            >
+              Apply
+            </button>
+          </div>
+        </label>
+        <label>
+          Dihedral angle
+          <div className="inline-field">
+            <input
+              type="number"
+              step="0.1"
+              value={dihedralAngle}
+              disabled={selected.length < 4}
+              onChange={(event) => setDihedralAngle(event.currentTarget.value)}
+            />
+            <button
+              type="button"
+              disabled={selected.length < 4 || !Number.isFinite(Number(dihedralAngle))}
+              onClick={() =>
+                dihedralAtomIds &&
+                void dispatchCommand({
+                  type: "SET_DIHEDRAL_ANGLE",
+                  atomIds: dihedralAtomIds,
+                  angle: Number(dihedralAngle),
+                })
+              }
+            >
+              Apply
+            </button>
+          </div>
+        </label>
+      </div>
+    </div>
   );
 }
 
@@ -291,8 +410,11 @@ function AIAssistant() {
 
   function generateCommands() {
     if (!state) return;
-    const aiContext = buildAIContext(state, screenshot);
-    setResult(proposeCommands(request, aiContext));
+    void invoke<AIResult>("propose_ai_commands", {
+      input: request,
+      state,
+      screenshot,
+    }).then(setResult);
   }
 
   function captureScreenshot() {
@@ -316,7 +438,7 @@ function AIAssistant() {
       <textarea
         value={request}
         onChange={(event) => setRequest(event.currentTarget.value)}
-        placeholder="Set WB97XD with def2-TZVP in THF, opt+freq, charge 0, multiplicity 1"
+        placeholder="Set WB97XD with def2-TZVP in THF, or set selected bond length to 1.42"
       />
       <div className="assistant-actions">
         <button type="button" onClick={captureScreenshot}>
@@ -340,6 +462,79 @@ function AIAssistant() {
       ) : null}
     </section>
   );
+}
+
+function formatMeasure(value: number | undefined) {
+  return value === undefined || !Number.isFinite(value) ? "" : value.toFixed(3);
+}
+
+function isAngleInput(value: string) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 && numeric <= 180;
+}
+
+function measureBondLength(molecule: Molecule, firstId: number, secondId: number) {
+  const first = findAtomPosition(molecule, firstId);
+  const second = findAtomPosition(molecule, secondId);
+  return first && second ? vectorLength(subtract(second, first)) : undefined;
+}
+
+function measureBondAngle(molecule: Molecule, firstId: number, centerId: number, thirdId: number) {
+  const first = findAtomPosition(molecule, firstId);
+  const center = findAtomPosition(molecule, centerId);
+  const third = findAtomPosition(molecule, thirdId);
+  if (!first || !center || !third) return undefined;
+  const firstVector = subtract(first, center);
+  const thirdVector = subtract(third, center);
+  const denominator = vectorLength(firstVector) * vectorLength(thirdVector);
+  if (denominator === 0) return undefined;
+  return Math.acos(clamp(dot(firstVector, thirdVector) / denominator, -1, 1)) * (180 / Math.PI);
+}
+
+function measureDihedralAngle(molecule: Molecule, firstId: number, secondId: number, thirdId: number, fourthId: number) {
+  const first = findAtomPosition(molecule, firstId);
+  const second = findAtomPosition(molecule, secondId);
+  const third = findAtomPosition(molecule, thirdId);
+  const fourth = findAtomPosition(molecule, fourthId);
+  if (!first || !second || !third || !fourth) return undefined;
+  const b0 = subtract(second, first);
+  const b1 = subtract(third, second);
+  const b2 = subtract(fourth, third);
+  const n1 = normalize(cross(b0, b1));
+  const n2 = normalize(cross(b1, b2));
+  const b1Unit = normalize(b1);
+  if (!n1 || !n2 || !b1Unit) return undefined;
+  const m1 = cross(n1, b1Unit);
+  return Math.atan2(dot(m1, n2), dot(n1, n2)) * (180 / Math.PI);
+}
+
+function findAtomPosition(molecule: Molecule, atomId: number) {
+  return molecule.atoms.find((atom) => atom.id === atomId)?.position;
+}
+
+function subtract(a: [number, number, number], b: [number, number, number]): [number, number, number] {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function dot(a: [number, number, number], b: [number, number, number]) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function cross(a: [number, number, number], b: [number, number, number]): [number, number, number] {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+
+function vectorLength(vector: [number, number, number]) {
+  return Math.sqrt(dot(vector, vector));
+}
+
+function normalize(vector: [number, number, number]) {
+  const length = vectorLength(vector);
+  return length === 0 ? undefined : ([vector[0] / length, vector[1] / length, vector[2] / length] as [number, number, number]);
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function moleculeToXyz(molecule: { name: string; atoms: { element: string; position: [number, number, number] }[] }) {

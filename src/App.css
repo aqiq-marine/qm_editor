@@ -171,6 +171,43 @@ h2 {
   grid-template-columns: 1fr 1fr;
 }
 
+.geometry-editor {
+  border-top: 1px solid #d4dae2;
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+}
+
+.geometry-heading {
+  align-items: baseline;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.geometry-heading h3 {
+  font-size: 14px;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.geometry-heading span {
+  color: #647181;
+  font-size: 12px;
+}
+
+.geometry-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.inline-field {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
 label {
   color: #425062;
   display: grid;
@@ -308,6 +345,11 @@ textarea {
 
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .geometry-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .assistant-actions {
