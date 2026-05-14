@@ -1,3 +1,4 @@
+mod ai;
 mod domain;
 
 use domain::{AiContext, AiResult, AppState, ChemicalSpec, Command, Molecule, ValidationMessage};
@@ -40,9 +41,13 @@ fn build_ai_context(state: AppState, screenshot: Option<String>) -> AiContext {
 }
 
 #[tauri::command]
-fn propose_ai_commands(input: String, state: AppState, screenshot: Option<String>) -> AiResult {
+async fn propose_ai_commands(
+    input: String,
+    state: AppState,
+    screenshot: Option<String>,
+) -> Result<AiResult, String> {
     let context = domain::build_ai_context(&state, screenshot);
-    domain::propose_ai_commands(&input, &context)
+    ai::propose_ai_commands(&input, &state, &context).await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

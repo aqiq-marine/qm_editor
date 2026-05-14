@@ -1,4 +1,4 @@
-import type { Basis, JobType, Method, Molecule, Solvent } from "./chemicalSpec";
+import type { Basis, Element, JobType, Method, Molecule, Solvent } from "./chemicalSpec";
 
 export type Command =
   | { type: "SET_METHOD"; method: Method }
@@ -10,6 +10,16 @@ export type Command =
   | { type: "SET_BOND_LENGTH"; atomIds: [number, number]; length: number }
   | { type: "SET_BOND_ANGLE"; atomIds: [number, number, number]; angle: number }
   | { type: "SET_DIHEDRAL_ANGLE"; atomIds: [number, number, number, number]; angle: number }
+  | {
+      type: "ADD_ATOM";
+      element: Element;
+      position: [number, number, number];
+      isotope?: number;
+      nuclearSpin?: number;
+    }
+  | { type: "DELETE_ATOM"; atomId: number }
+  | { type: "ADD_BOND"; atomIds: [number, number]; order: 1 | 2 | 3 }
+  | { type: "DELETE_BOND"; bondId: number }
   | { type: "SET_MOLECULE"; molecule: Molecule }
   | { type: "TOGGLE_ATOM_SELECTION"; atomId: number }
   | { type: "CLEAR_SELECTION" };

@@ -2,10 +2,38 @@ export type JobType = "opt" | "freq" | "opt+freq" | "ts";
 export type Method = "B3LYP" | "WB97XD";
 export type Basis = "6-31G(d)" | "def2-SVP" | "def2-TZVP";
 export type Solvent = "THF" | "Water";
+export type Element =
+  | "H"
+  | "He"
+  | "Li"
+  | "Be"
+  | "B"
+  | "C"
+  | "N"
+  | "O"
+  | "F"
+  | "Ne"
+  | "Na"
+  | "Mg"
+  | "Al"
+  | "Si"
+  | "P"
+  | "S"
+  | "Cl"
+  | "Ar"
+  | "K"
+  | "Ca"
+  | "Fe"
+  | "Cu"
+  | "Zn"
+  | "Br"
+  | "I";
 
 export type Atom = {
   id: number;
-  element: string;
+  element: Element;
+  isotope?: number;
+  nuclearSpin?: number;
   position: [number, number, number];
 };
 
@@ -57,6 +85,33 @@ export const supportedJobTypes: JobType[] = ["opt", "freq", "opt+freq", "ts"];
 export const supportedMethods: Method[] = ["B3LYP", "WB97XD"];
 export const supportedBases: Basis[] = ["6-31G(d)", "def2-SVP", "def2-TZVP"];
 export const supportedSolvents: Solvent[] = ["THF", "Water"];
+export const supportedElements: Element[] = [
+  "H",
+  "He",
+  "Li",
+  "Be",
+  "B",
+  "C",
+  "N",
+  "O",
+  "F",
+  "Ne",
+  "Na",
+  "Mg",
+  "Al",
+  "Si",
+  "P",
+  "S",
+  "Cl",
+  "Ar",
+  "K",
+  "Ca",
+  "Fe",
+  "Cu",
+  "Zn",
+  "Br",
+  "I",
+];
 
 export const emptyMolecule: Molecule = {
   name: "Untitled molecule",

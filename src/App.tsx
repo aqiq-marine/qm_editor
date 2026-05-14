@@ -6,9 +6,11 @@ import { useAppStore } from "./app/store";
 import type { AIResult } from "./domain/commands";
 import {
   supportedBases,
+  supportedElements,
   supportedJobTypes,
   supportedMethods,
   supportedSolvents,
+  type Element,
   type Molecule,
   type Solvent,
   type ValidationMessage,
@@ -218,6 +220,8 @@ function CalculationForm({ messages }: { messages: ValidationMessage[] }) {
         />
       </div>
 
+      <MoleculeEditor />
+
       <GeometryEditor />
 
       <div className="validation-list">
@@ -232,6 +236,99 @@ function CalculationForm({ messages }: { messages: ValidationMessage[] }) {
         )}
       </div>
     </section>
+  );
+}
+
+function MoleculeEditor() {
+  const { state, dispatchCommand, applyCommands } = useAppStore();
+  const [element, setElement] = useState<Element>("C");
+  const [x, setX] = useState("0");
+  const [y, setY] = useState("0");
+  const [z, setZ] = useState("0");
+  const [isotope, setIsotope] = useState("");
+  const [nuclearSpin, setNuclearSpin] = useState("");
+  const [bondOrder, setBondOrder] = useState<1 | 2 | 3>(1);
+
+  if (!state) return null;
+  const molecule = state.domain.chemicalSpec.molecule;
+  const selected = state.ui.selectedAtoms;
+  const coordinates = [Number(x), Number(y), Number(z)] as [number, number, number];
+  const canAddAtom = coordinates.every(Number.isFinite) && isOptionalInteger(isotope, 1) && isOptionalInteger(nuclearSpin, 0);
+  const selectedBondIds = molecule.bonds
+    .filter((bond) => bond.atomIds.every((atomId) => selected.includes(atomId)))
+    .map((bond) => bond.id);
+
+  function addAtom() {
+    if (!canAddAtom) return;
+    void dispatchCommand({
+      type: "ADD_ATOM",
+      element,
+      position: coordinates,
+      isotope: isotope === "" ? undefined : Number(isotope),
+      nuclearSpin: nuclearSpin === "" ? undefined : Number(nuclearSpin),
+    });
+  }
+
+  function deleteSelectedAtoms() {
+    void applyCommands(selected.map((atomId) => ({ type: "DELETE_ATOM", atomId })));
+  }
+
+  return (
+    <div className="molecule-editor" aria-label="Molecule edit menu">
+      <div className="geometry-heading">
+        <h3>Molecule Edit</h3>
+        <span>{molecule.bonds.length} bonds</span>
+      </div>
+
+      <div className="atom-editor-grid">
+        <SelectField label="Element" value={element} options={supportedElements} onChange={setElement} />
+        <NumberTextField label="X" value={x} step="0.001" onChange={setX} />
+        <NumberTextField label="Y" value={y} step="0.001" onChange={setY} />
+        <NumberTextField label="Z" value={z} step="0.001" onChange={setZ} />
+        <NumberTextField label="Isotope" value={isotope} min="1" step="1" onChange={setIsotope} />
+        <NumberTextField label="2I" value={nuclearSpin} min="0" step="1" onChange={setNuclearSpin} />
+      </div>
+
+      <div className="editor-actions">
+        <button type="button" disabled={!canAddAtom} onClick={addAtom}>
+          Add Atom
+        </button>
+        <button type="button" disabled={selected.length === 0} onClick={deleteSelectedAtoms}>
+          Delete Selected Atoms
+        </button>
+      </div>
+
+      <div className="bond-actions">
+        <label>
+          Bond order
+          <select value={bondOrder} onChange={(event) => setBondOrder(Number(event.currentTarget.value) as 1 | 2 | 3)}>
+            <option value={1}>1</option>
+            <option value={2}>2</option>
+            <option value={3}>3</option>
+          </select>
+        </label>
+        <button
+          type="button"
+          disabled={selected.length < 2}
+          onClick={() =>
+            void dispatchCommand({
+              type: "ADD_BOND",
+              atomIds: [selected[0], selected[1]],
+              order: bondOrder,
+            })
+          }
+        >
+          Add Bond
+        </button>
+        <button
+          type="button"
+          disabled={selectedBondIds.length === 0}
+          onClick={() => void applyCommands(selectedBondIds.map((bondId) => ({ type: "DELETE_BOND", bondId })))}
+        >
+          Delete Selected Bonds
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -402,19 +499,53 @@ function NumberField({
   );
 }
 
+function NumberTextField({
+  label,
+  value,
+  min,
+  step,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  min?: string;
+  step?: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label>
+      {label}
+      <input
+        type="number"
+        min={min}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(event.currentTarget.value)}
+      />
+    </label>
+  );
+}
+
 function AIAssistant() {
   const { state, applyCommands, undo, canUndo } = useAppStore();
   const [request, setRequest] = useState("");
   const [result, setResult] = useState<AIResult | null>(null);
+  const [error, setError] = useState("");
   const [screenshot, setScreenshot] = useState<string | undefined>();
 
   function generateCommands() {
     if (!state) return;
+    setError("");
     void invoke<AIResult>("propose_ai_commands", {
       input: request,
       state,
       screenshot,
-    }).then(setResult);
+    })
+      .then(setResult)
+      .catch((caught) => {
+        setResult(null);
+        setError(typeof caught === "string" ? caught : "Failed to generate AI commands.");
+      });
   }
 
   function captureScreenshot() {
@@ -460,6 +591,7 @@ function AIAssistant() {
           <pre>{JSON.stringify({ commands: result.commands, explanation: result.explanation }, null, 2)}</pre>
         </div>
       ) : null}
+      {error ? <p className="inline-error">{error}</p> : null}
     </section>
   );
 }
@@ -471,6 +603,12 @@ function formatMeasure(value: number | undefined) {
 function isAngleInput(value: string) {
   const numeric = Number(value);
   return Number.isFinite(numeric) && numeric >= 0 && numeric <= 180;
+}
+
+function isOptionalInteger(value: string, min: number) {
+  if (value === "") return true;
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric >= min;
 }
 
 function measureBondLength(molecule: Molecule, firstId: number, secondId: number) {

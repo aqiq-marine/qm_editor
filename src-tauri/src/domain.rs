@@ -38,7 +38,9 @@ pub struct Molecule {
 #[serde(rename_all = "camelCase")]
 pub struct Atom {
     pub id: u32,
-    pub element: String,
+    pub element: Element,
+    pub isotope: Option<MassNumber>,
+    pub nuclear_spin: Option<TwiceSpin>,
     pub position: [f64; 3],
 }
 
@@ -48,6 +50,58 @@ pub struct Bond {
     pub id: u32,
     pub atom_ids: [u32; 2],
     pub order: u8,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct MassNumber(pub u16);
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct TwiceSpin(pub u8);
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum Element {
+    H,
+    #[serde(rename = "He")]
+    He,
+    #[serde(rename = "Li")]
+    Li,
+    #[serde(rename = "Be")]
+    Be,
+    B,
+    C,
+    N,
+    O,
+    F,
+    #[serde(rename = "Ne")]
+    Ne,
+    #[serde(rename = "Na")]
+    Na,
+    #[serde(rename = "Mg")]
+    Mg,
+    #[serde(rename = "Al")]
+    Al,
+    #[serde(rename = "Si")]
+    Si,
+    P,
+    S,
+    #[serde(rename = "Cl")]
+    Cl,
+    #[serde(rename = "Ar")]
+    Ar,
+    K,
+    #[serde(rename = "Ca")]
+    Ca,
+    #[serde(rename = "Fe")]
+    Fe,
+    #[serde(rename = "Cu")]
+    Cu,
+    #[serde(rename = "Zn")]
+    Zn,
+    #[serde(rename = "Br")]
+    Br,
+    I,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -102,17 +156,58 @@ pub enum Solvent {
     rename_all_fields = "camelCase"
 )]
 pub enum Command {
-    SetMethod { method: Method },
-    SetBasis { basis: Basis },
-    SetJobType { job_type: JobType },
-    SetSolvent { solvent: Option<Solvent> },
-    SetCharge { charge: i32 },
-    SetMultiplicity { multiplicity: u32 },
-    SetBondLength { atom_ids: [u32; 2], length: f64 },
-    SetBondAngle { atom_ids: [u32; 3], angle: f64 },
-    SetDihedralAngle { atom_ids: [u32; 4], angle: f64 },
-    SetMolecule { molecule: Molecule },
-    ToggleAtomSelection { atom_id: u32 },
+    SetMethod {
+        method: Method,
+    },
+    SetBasis {
+        basis: Basis,
+    },
+    SetJobType {
+        job_type: JobType,
+    },
+    SetSolvent {
+        solvent: Option<Solvent>,
+    },
+    SetCharge {
+        charge: i32,
+    },
+    SetMultiplicity {
+        multiplicity: u32,
+    },
+    SetBondLength {
+        atom_ids: [u32; 2],
+        length: f64,
+    },
+    SetBondAngle {
+        atom_ids: [u32; 3],
+        angle: f64,
+    },
+    SetDihedralAngle {
+        atom_ids: [u32; 4],
+        angle: f64,
+    },
+    AddAtom {
+        element: Element,
+        position: [f64; 3],
+        isotope: Option<MassNumber>,
+        nuclear_spin: Option<TwiceSpin>,
+    },
+    DeleteAtom {
+        atom_id: u32,
+    },
+    AddBond {
+        atom_ids: [u32; 2],
+        order: u8,
+    },
+    DeleteBond {
+        bond_id: u32,
+    },
+    SetMolecule {
+        molecule: Molecule,
+    },
+    ToggleAtomSelection {
+        atom_id: u32,
+    },
     ClearSelection,
 }
 
@@ -127,7 +222,9 @@ pub struct ValidationMessage {
 #[serde(rename_all = "camelCase")]
 pub struct AtomSummary {
     pub id: u32,
-    pub element: String,
+    pub element: Element,
+    pub isotope: Option<MassNumber>,
+    pub nuclear_spin: Option<TwiceSpin>,
     pub position: [f64; 3],
 }
 
@@ -173,17 +270,23 @@ pub fn initial_app_state() -> AppState {
                     atoms: vec![
                         Atom {
                             id: 1,
-                            element: "O".to_string(),
+                            element: Element::O,
+                            isotope: None,
+                            nuclear_spin: None,
                             position: [0.0, 0.0, 0.0],
                         },
                         Atom {
                             id: 2,
-                            element: "H".to_string(),
+                            element: Element::H,
+                            isotope: None,
+                            nuclear_spin: None,
                             position: [0.758, 0.586, 0.0],
                         },
                         Atom {
                             id: 3,
-                            element: "H".to_string(),
+                            element: Element::H,
+                            isotope: None,
+                            nuclear_spin: None,
                             position: [-0.758, 0.586, 0.0],
                         },
                     ],
@@ -237,6 +340,36 @@ pub fn reduce(mut state: AppState, command: Command) -> AppState {
         Command::SetDihedralAngle { atom_ids, angle } => {
             set_dihedral_angle(&mut state.domain.chemical_spec.molecule, atom_ids, angle);
         }
+        Command::AddAtom {
+            element,
+            position,
+            isotope,
+            nuclear_spin,
+        } => add_atom(
+            &mut state.domain.chemical_spec.molecule,
+            element,
+            position,
+            isotope,
+            nuclear_spin,
+        ),
+        Command::DeleteAtom { atom_id } => {
+            delete_atom(&mut state.domain.chemical_spec.molecule, atom_id);
+            state
+                .ui
+                .selected_atoms
+                .retain(|selected| *selected != atom_id);
+        }
+        Command::AddBond { atom_ids, order } => {
+            add_bond(&mut state.domain.chemical_spec.molecule, atom_ids, order);
+        }
+        Command::DeleteBond { bond_id } => {
+            state
+                .domain
+                .chemical_spec
+                .molecule
+                .bonds
+                .retain(|bond| bond.id != bond_id);
+        }
         Command::SetMolecule { molecule } => {
             state.domain.chemical_spec.molecule = molecule;
             state.ui.selected_atoms.clear();
@@ -282,7 +415,10 @@ pub fn render_gaussian(spec: &ChemicalSpec) -> String {
         .map(|atom| {
             format!(
                 "{:<2} {:>12.6} {:>12.6} {:>12.6}",
-                atom.element, atom.position[0], atom.position[1], atom.position[2]
+                element_symbol(atom.element),
+                atom.position[0],
+                atom.position[1],
+                atom.position[2]
             )
         })
         .collect::<Vec<_>>()
@@ -318,7 +454,7 @@ pub fn validate_chemical_spec(spec: &ChemicalSpec) -> Vec<ValidationMessage> {
 
     let charge_parity = calculation.charge.unsigned_abs() % 2;
     let electron_parity = molecule.atoms.iter().fold(charge_parity, |parity, atom| {
-        (parity + valence_parity(&atom.element)) % 2
+        (parity + valence_parity(atom.element)) % 2
     });
     let unpaired_parity = (calculation.multiplicity - 1) % 2;
     if !molecule.atoms.is_empty() && electron_parity != unpaired_parity {
@@ -340,7 +476,9 @@ pub fn build_ai_context(state: &AppState, screenshot: Option<String>) -> AiConte
         .filter_map(|atom_id| molecule.atoms.iter().find(|atom| atom.id == *atom_id))
         .map(|atom| AtomSummary {
             id: atom.id,
-            element: atom.element.clone(),
+            element: atom.element,
+            isotope: atom.isotope,
+            nuclear_spin: atom.nuclear_spin,
             position: atom.position,
         })
         .collect::<Vec<_>>();
@@ -470,7 +608,9 @@ fn parse_xyz(file_name: &str, text: &str) -> Result<Molecule, String> {
         }
         atoms.push(Atom {
             id: (index + 1) as u32,
-            element: normalize_element(parts[0]),
+            element: parse_element(parts[0])?,
+            isotope: None,
+            nuclear_spin: None,
             position: [
                 parse_coord(parts[1], "XYZ coordinates must be numeric.")?,
                 parse_coord(parts[2], "XYZ coordinates must be numeric.")?,
@@ -520,7 +660,9 @@ fn parse_mol(file_name: &str, text: &str) -> Result<Molecule, String> {
         }
         atoms.push(Atom {
             id: (index + 1) as u32,
-            element: normalize_element(parts[3]),
+            element: parse_element(parts[3])?,
+            isotope: None,
+            nuclear_spin: None,
             position: [
                 parse_coord(parts[0], "MOL coordinates must be numeric.")?,
                 parse_coord(parts[1], "MOL coordinates must be numeric.")?,
@@ -571,8 +713,7 @@ fn infer_bonds(atoms: &[Atom]) -> Vec<Bond> {
         for second_index in (first_index + 1)..atoms.len() {
             let first = &atoms[first_index];
             let second = &atoms[second_index];
-            let threshold =
-                covalent_radius(&first.element) + covalent_radius(&second.element) + 0.45;
+            let threshold = covalent_radius(first.element) + covalent_radius(second.element) + 0.45;
             if distance(first.position, second.position) <= threshold {
                 bonds.push(Bond {
                     id: (bonds.len() + 1) as u32,
@@ -585,14 +726,14 @@ fn infer_bonds(atoms: &[Atom]) -> Vec<Bond> {
     bonds
 }
 
-fn parse_json_ai_result(text: &str) -> Option<AiResult> {
-    let parsed = serde_json::from_str::<AiResult>(text).ok()?;
+pub fn parse_ai_result_json(text: &str) -> Result<AiResult, String> {
+    let parsed = serde_json::from_str::<AiResult>(text).map_err(|error| error.to_string())?;
     let commands = parsed
         .commands
         .into_iter()
         .filter(is_ai_command)
         .collect::<Vec<_>>();
-    Some(AiResult {
+    Ok(AiResult {
         commands,
         explanation: if parsed.explanation.is_empty() {
             "Parsed JSON commands.".to_string()
@@ -600,6 +741,10 @@ fn parse_json_ai_result(text: &str) -> Option<AiResult> {
             parsed.explanation
         },
     })
+}
+
+fn parse_json_ai_result(text: &str) -> Option<AiResult> {
+    parse_ai_result_json(text).ok()
 }
 
 fn is_ai_command(command: &Command) -> bool {
@@ -614,6 +759,10 @@ fn is_ai_command(command: &Command) -> bool {
             | Command::SetBondLength { .. }
             | Command::SetBondAngle { .. }
             | Command::SetDihedralAngle { .. }
+            | Command::AddAtom { .. }
+            | Command::DeleteAtom { .. }
+            | Command::AddBond { .. }
+            | Command::DeleteBond { .. }
     )
 }
 
@@ -720,7 +869,11 @@ fn dedupe_ai_commands(commands: Vec<Command>) -> Vec<Command> {
             Command::SetMultiplicity { .. } => multiplicity = Some(command),
             Command::SetBondLength { .. }
             | Command::SetBondAngle { .. }
-            | Command::SetDihedralAngle { .. } => unique.push(command),
+            | Command::SetDihedralAngle { .. }
+            | Command::AddAtom { .. }
+            | Command::DeleteAtom { .. }
+            | Command::AddBond { .. }
+            | Command::DeleteBond { .. } => unique.push(command),
             Command::SetMolecule { .. }
             | Command::ToggleAtomSelection { .. }
             | Command::ClearSelection => {}
@@ -818,6 +971,77 @@ fn set_dihedral_angle(molecule: &mut Molecule, atom_ids: [u32; 4], angle: f64) {
     molecule.atoms[moving_index].position = add(third, rotate(sub(moving, third), axis, delta));
 }
 
+fn add_atom(
+    molecule: &mut Molecule,
+    element: Element,
+    position: [f64; 3],
+    isotope: Option<MassNumber>,
+    nuclear_spin: Option<TwiceSpin>,
+) {
+    if !position.iter().all(|coordinate| coordinate.is_finite()) {
+        return;
+    }
+    molecule.atoms.push(Atom {
+        id: next_atom_id(molecule),
+        element,
+        isotope,
+        nuclear_spin,
+        position,
+    });
+}
+
+fn delete_atom(molecule: &mut Molecule, atom_id: u32) {
+    molecule.atoms.retain(|atom| atom.id != atom_id);
+    molecule
+        .bonds
+        .retain(|bond| !bond.atom_ids.contains(&atom_id));
+}
+
+fn add_bond(molecule: &mut Molecule, atom_ids: [u32; 2], order: u8) {
+    if atom_ids[0] == atom_ids[1] || !(1..=3).contains(&order) {
+        return;
+    }
+    if atom_index(molecule, atom_ids[0]).is_none() || atom_index(molecule, atom_ids[1]).is_none() {
+        return;
+    }
+    if molecule
+        .bonds
+        .iter()
+        .any(|bond| same_bond(bond.atom_ids, atom_ids))
+    {
+        return;
+    }
+    molecule.bonds.push(Bond {
+        id: next_bond_id(molecule),
+        atom_ids,
+        order,
+    });
+}
+
+fn next_atom_id(molecule: &Molecule) -> u32 {
+    molecule
+        .atoms
+        .iter()
+        .map(|atom| atom.id)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1)
+}
+
+fn next_bond_id(molecule: &Molecule) -> u32 {
+    molecule
+        .bonds
+        .iter()
+        .map(|bond| bond.id)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1)
+}
+
+fn same_bond(left: [u32; 2], right: [u32; 2]) -> bool {
+    (left[0] == right[0] && left[1] == right[1]) || (left[0] == right[1] && left[1] == right[0])
+}
+
 fn atom_index(molecule: &Molecule, atom_id: u32) -> Option<usize> {
     molecule.atoms.iter().position(|atom| atom.id == atom_id)
 }
@@ -899,25 +1123,32 @@ fn perpendicular(vector: [f64; 3]) -> [f64; 3] {
     normalize(cross(vector, candidate)).unwrap_or([0.0, 0.0, 1.0])
 }
 
-fn covalent_radius(element: &str) -> f64 {
+fn covalent_radius(element: Element) -> f64 {
     match element {
-        "H" => 0.31,
-        "C" => 0.76,
-        "N" => 0.71,
-        "O" => 0.66,
-        "F" => 0.57,
-        "P" => 1.07,
-        "S" => 1.05,
-        "Cl" => 1.02,
-        "Br" => 1.20,
-        "I" => 1.39,
+        Element::H => 0.31,
+        Element::C => 0.76,
+        Element::N => 0.71,
+        Element::O => 0.66,
+        Element::F => 0.57,
+        Element::P => 1.07,
+        Element::S => 1.05,
+        Element::Cl => 1.02,
+        Element::Br => 1.20,
+        Element::I => 1.39,
         _ => 0.75,
     }
 }
 
-fn valence_parity(element: &str) -> u32 {
+fn valence_parity(element: Element) -> u32 {
     match element {
-        "H" | "B" | "N" | "F" | "P" | "Cl" | "Br" | "I" => 1,
+        Element::H
+        | Element::B
+        | Element::N
+        | Element::F
+        | Element::P
+        | Element::Cl
+        | Element::Br
+        | Element::I => 1,
         _ => 0,
     }
 }
@@ -950,6 +1181,67 @@ fn solvent_name(solvent: Solvent) -> &'static str {
     match solvent {
         Solvent::THF => "THF",
         Solvent::Water => "Water",
+    }
+}
+
+fn parse_element(value: &str) -> Result<Element, String> {
+    match normalize_element(value).as_str() {
+        "H" => Ok(Element::H),
+        "He" => Ok(Element::He),
+        "Li" => Ok(Element::Li),
+        "Be" => Ok(Element::Be),
+        "B" => Ok(Element::B),
+        "C" => Ok(Element::C),
+        "N" => Ok(Element::N),
+        "O" => Ok(Element::O),
+        "F" => Ok(Element::F),
+        "Ne" => Ok(Element::Ne),
+        "Na" => Ok(Element::Na),
+        "Mg" => Ok(Element::Mg),
+        "Al" => Ok(Element::Al),
+        "Si" => Ok(Element::Si),
+        "P" => Ok(Element::P),
+        "S" => Ok(Element::S),
+        "Cl" => Ok(Element::Cl),
+        "Ar" => Ok(Element::Ar),
+        "K" => Ok(Element::K),
+        "Ca" => Ok(Element::Ca),
+        "Fe" => Ok(Element::Fe),
+        "Cu" => Ok(Element::Cu),
+        "Zn" => Ok(Element::Zn),
+        "Br" => Ok(Element::Br),
+        "I" => Ok(Element::I),
+        element => Err(format!("Unsupported element '{element}'.")),
+    }
+}
+
+fn element_symbol(element: Element) -> &'static str {
+    match element {
+        Element::H => "H",
+        Element::He => "He",
+        Element::Li => "Li",
+        Element::Be => "Be",
+        Element::B => "B",
+        Element::C => "C",
+        Element::N => "N",
+        Element::O => "O",
+        Element::F => "F",
+        Element::Ne => "Ne",
+        Element::Na => "Na",
+        Element::Mg => "Mg",
+        Element::Al => "Al",
+        Element::Si => "Si",
+        Element::P => "P",
+        Element::S => "S",
+        Element::Cl => "Cl",
+        Element::Ar => "Ar",
+        Element::K => "K",
+        Element::Ca => "Ca",
+        Element::Fe => "Fe",
+        Element::Cu => "Cu",
+        Element::Zn => "Zn",
+        Element::Br => "Br",
+        Element::I => "I",
     }
 }
 
@@ -1050,7 +1342,10 @@ mod tests {
             },
         );
 
-        assert!((distance(atom_position_for(&state, 1), atom_position_for(&state, 2)) - 1.42).abs() < 1e-9);
+        assert!(
+            (distance(atom_position_for(&state, 1), atom_position_for(&state, 2)) - 1.42).abs()
+                < 1e-9
+        );
     }
 
     #[test]
@@ -1070,6 +1365,62 @@ mod tests {
         assert!((measured - 120.0).abs() < 1e-9);
     }
 
+    #[test]
+    fn add_atom_preserves_isotope_and_nuclear_spin() {
+        let state = reduce(
+            initial_app_state(),
+            Command::AddAtom {
+                element: Element::C,
+                position: [1.0, 2.0, 3.0],
+                isotope: Some(MassNumber(13)),
+                nuclear_spin: Some(TwiceSpin(1)),
+            },
+        );
+        let atom = state
+            .domain
+            .chemical_spec
+            .molecule
+            .atoms
+            .iter()
+            .find(|atom| atom.id == 4)
+            .expect("new atom should exist");
+
+        assert_eq!(atom.element, Element::C);
+        assert_eq!(atom.isotope, Some(MassNumber(13)));
+        assert_eq!(atom.nuclear_spin, Some(TwiceSpin(1)));
+        assert_eq!(atom.position, [1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn delete_atom_removes_connected_bonds_and_selection() {
+        let state = reduce(
+            initial_app_state(),
+            Command::ToggleAtomSelection { atom_id: 2 },
+        );
+        let state = reduce(state, Command::DeleteAtom { atom_id: 2 });
+        let molecule = &state.domain.chemical_spec.molecule;
+
+        assert!(molecule.atoms.iter().all(|atom| atom.id != 2));
+        assert!(molecule
+            .bonds
+            .iter()
+            .all(|bond| !bond.atom_ids.contains(&2)));
+        assert!(state.ui.selected_atoms.is_empty());
+    }
+
+    #[test]
+    fn add_bond_rejects_duplicate_bonds() {
+        let state = reduce(
+            initial_app_state(),
+            Command::AddBond {
+                atom_ids: [2, 1],
+                order: 2,
+            },
+        );
+
+        assert_eq!(state.domain.chemical_spec.molecule.bonds.len(), 2);
+    }
+
     fn angle_degrees(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> Option<f64> {
         let ba = sub(a, b);
         let bc = sub(c, b);
@@ -1077,6 +1428,11 @@ mod tests {
         if denominator <= f64::EPSILON {
             return None;
         }
-        Some((dot(ba, bc) / denominator).clamp(-1.0, 1.0).acos().to_degrees())
+        Some(
+            (dot(ba, bc) / denominator)
+                .clamp(-1.0, 1.0)
+                .acos()
+                .to_degrees(),
+        )
     }
 }
