@@ -1,7 +1,8 @@
 use rig::{completion::Prompt, prelude::*, providers::gemini};
 use serde::Serialize;
 
-use crate::domain::{self, AiContext, AiResult, AppState};
+use crate::domain::{AiContext, AiResult, AppState};
+use crate::ai_commands::{propose_ai_commands as ai_propose, parse_ai_result_json};
 
 const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash-lite";
 
@@ -26,14 +27,14 @@ impl AiProvider {
 
 pub async fn propose_ai_commands(
     input: &str,
-    state: &AppState,
+    _state: &AppState,
     context: &AiContext,
 ) -> Result<AiResult, String> {
     if input.trim().is_empty() {
-        return Ok(domain::propose_ai_commands(input, context));
+        return Ok(ai_propose(input, context));
     }
 
-    if let Ok(result) = domain::parse_ai_result_json(input.trim()) {
+    if let Ok(result) = parse_ai_result_json(input.trim()) {
         return Ok(result);
     }
 
@@ -42,12 +43,12 @@ pub async fn propose_ai_commands(
     }
 
     match AiProvider::from_env()? {
-        AiProvider::GoogleGemini => propose_with_gemini(input, state, context).await,
+        AiProvider::GoogleGemini => propose_with_gemini(input, _state, context).await,
     }
 }
 
 fn local_result_for_supported_request(input: &str, context: &AiContext) -> Option<AiResult> {
-    let result = domain::propose_ai_commands(input, context);
+    let result = ai_propose(input, context);
     (!result.commands.is_empty()).then_some(result)
 }
 
@@ -75,7 +76,7 @@ async fn propose_with_gemini(
     let json = extract_json_object(&response)
         .ok_or_else(|| "AI response did not contain a JSON object.".to_string())?;
 
-    domain::parse_ai_result_json(json)
+    parse_ai_result_json(json)
 }
 
 #[derive(Serialize)]
@@ -133,11 +134,13 @@ fn extract_json_object(text: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::domain::{self, Command, Method};
+    use crate::reducer;
+    use crate::ai_commands;
 
     #[test]
     fn uses_local_parser_for_supported_short_request() {
-        let state = domain::initial_app_state();
-        let context = domain::build_ai_context(&state, None);
+        let state = reducer::initial_app_state();
+        let context = ai_commands::build_ai_context(&state, None);
         let result = local_result_for_supported_request("set wb97xd", &context)
             .expect("supported short request should be handled locally");
 

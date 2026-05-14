@@ -1,53 +1,64 @@
 mod ai;
-mod domain;
+pub mod domain;
+pub mod reducer;
+pub mod validation;
+pub mod parser;
+pub mod gaussian;
+pub mod geometry;
+pub mod ai_commands;
 
-use domain::{AiContext, AiResult, AppState, ChemicalSpec, Command, Molecule, ValidationMessage};
+use domain::{AppState, ChemicalSpec, Command, Molecule, ValidationMessage, AiContext, AiResult};
+use reducer::{initial_app_state, reduce};
+use parser::parse_molecule_file;
+use gaussian::render_gaussian;
+use validation::validate_chemical_spec;
+use ai_commands::{build_ai_context, propose_ai_commands};
 
 #[tauri::command]
 fn get_initial_app_state() -> AppState {
-    domain::initial_app_state()
+    initial_app_state()
 }
 
 #[tauri::command]
 fn apply_command(state: AppState, command: Command) -> AppState {
-    domain::reduce(state, command)
+    reduce(state, command)
 }
 
 #[tauri::command]
 fn apply_commands(state: AppState, commands: Vec<Command>) -> AppState {
     commands.into_iter().fold(state, |current_state, command| {
-        domain::reduce(current_state, command)
+        reduce(current_state, command)
     })
 }
 
 #[tauri::command]
-fn parse_molecule_file(file_name: String, text: String) -> Result<Molecule, String> {
-    domain::parse_molecule_file(&file_name, &text)
+fn parse_molecule_file_tauri(file_name: String, text: String) -> Result<Molecule, String> {
+    parse_molecule_file(&file_name, &text)
 }
 
 #[tauri::command]
-fn render_gaussian(spec: ChemicalSpec) -> String {
-    domain::render_gaussian(&spec)
+fn render_gaussian_tauri(spec: ChemicalSpec) -> String {
+    render_gaussian(&spec)
 }
 
 #[tauri::command]
-fn validate_chemical_spec(spec: ChemicalSpec) -> Vec<ValidationMessage> {
-    domain::validate_chemical_spec(&spec)
+fn validate_chemical_spec_tauri(spec: ChemicalSpec) -> Vec<ValidationMessage> {
+    validate_chemical_spec(&spec)
 }
 
 #[tauri::command]
-fn build_ai_context(state: AppState, screenshot: Option<String>) -> AiContext {
-    domain::build_ai_context(&state, screenshot)
+fn build_ai_context_tauri(state: AppState, screenshot: Option<String>) -> AiContext {
+    build_ai_context(&state, screenshot)
 }
 
 #[tauri::command]
-async fn propose_ai_commands(
+async fn propose_ai_commands_tauri(
     input: String,
     state: AppState,
     screenshot: Option<String>,
 ) -> Result<AiResult, String> {
-    let context = domain::build_ai_context(&state, screenshot);
-    ai::propose_ai_commands(&input, &state, &context).await
+    let context = build_ai_context(&state, screenshot);
+    Ok(propose_ai_commands(&input, &context))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -58,11 +69,11 @@ pub fn run() {
             get_initial_app_state,
             apply_command,
             apply_commands,
-            parse_molecule_file,
-            render_gaussian,
-            validate_chemical_spec,
-            build_ai_context,
-            propose_ai_commands
+            parse_molecule_file_tauri,
+            render_gaussian_tauri,
+            validate_chemical_spec_tauri,
+            build_ai_context_tauri,
+            propose_ai_commands_tauri
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
