@@ -518,7 +518,7 @@ pub fn propose_ai_commands(input: &str, context: &AiContext) -> AiResult {
             method: Method::B3LYP,
         });
     }
-    if normalized.contains("wb97xd") || normalized.contains("wB97XD") {
+    if normalized.contains("wb97xd") {
         commands.push(Command::SetMethod {
             method: Method::WB97XD,
         });
@@ -545,23 +545,24 @@ pub fn propose_ai_commands(input: &str, context: &AiContext) -> AiResult {
             solvent: Some(Solvent::THF),
         });
     }
-    if normalized.contains("water") {
+    if normalized.contains("water") || normalized.contains("水") {
         commands.push(Command::SetSolvent {
             solvent: Some(Solvent::Water),
         });
     }
-    if normalized.contains("no solvent") || normalized.contains("gas phase") {
+    if normalized.contains("no solvent") || normalized.contains("gas phase") || normalized.contains("気相") || normalized.contains("溶媒なし") {
         commands.push(Command::SetSolvent { solvent: None });
     }
 
     if let Some(job_type) = infer_job_type(&normalized) {
         commands.push(Command::SetJobType { job_type });
     }
-    if let Some(charge) = parse_number_after(&normalized, "charge") {
+    if let Some(charge) = parse_number_after(&normalized, "charge").or_else(|| parse_number_after(&normalized, "電荷")) {
         commands.push(Command::SetCharge { charge });
     }
     if let Some(multiplicity) = parse_number_after(&normalized, "multiplicity")
         .or_else(|| parse_number_after(&normalized, "mult"))
+        .or_else(|| parse_number_after(&normalized, "多重度"))
         .and_then(|value| u32::try_from(value).ok())
     {
         commands.push(Command::SetMultiplicity { multiplicity });
@@ -767,13 +768,18 @@ fn is_ai_command(command: &Command) -> bool {
 }
 
 fn infer_job_type(text: &str) -> Option<JobType> {
-    if text.contains("transition state") || text.split_whitespace().any(|token| token == "ts") {
+    if text.contains("transition state")
+        || text.split_whitespace().any(|token| token == "ts")
+        || text.contains("遷移状態")
+    {
         return Some(JobType::Ts);
     }
 
-    let has_opt =
-        text.contains("opt") || text.contains("optimize") || text.contains("optimization");
-    let has_freq = text.contains("freq") || text.contains("frequency");
+    let has_opt = text.contains("opt")
+        || text.contains("optimize")
+        || text.contains("optimization")
+        || text.contains("最適化");
+    let has_freq = text.contains("freq") || text.contains("frequency") || text.contains("振動数");
     match (has_opt, has_freq) {
         (true, true) => Some(JobType::OptFreq),
         (true, false) => Some(JobType::Opt),
@@ -787,14 +793,18 @@ fn parse_number_after(text: &str, keyword: &str) -> Option<i32> {
     for (index, word) in words.iter().enumerate() {
         if *word == keyword {
             let next = words.get(index + 1)?;
-            let numeric = next.trim_matches(|char: char| char == ':' || char == '=' || char == ',');
+            let numeric = next.trim_matches(|char: char| {
+                char == ':' || char == '=' || char == ',' || char == 'を' || char == 'に'
+            });
             if let Ok(value) = numeric.parse::<i32>() {
                 return Some(value);
             }
         }
 
         if let Some(rest) = word.strip_prefix(keyword) {
-            let numeric = rest.trim_matches(|char: char| char == ':' || char == '=' || char == ',');
+            let numeric = rest.trim_matches(|char: char| {
+                char == ':' || char == '=' || char == ',' || char == 'を' || char == 'に'
+            });
             if !numeric.is_empty() {
                 if let Ok(value) = numeric.parse::<i32>() {
                     return Some(value);
@@ -813,19 +823,25 @@ fn infer_geometry_command(text: &str, context: &AiContext) -> Option<Command> {
         .map(|atom| atom.id)
         .collect::<Vec<_>>();
 
-    if (text.contains("dihedral") || text.contains("torsion")) && selected.len() >= 4 {
+    if (text.contains("dihedral") || text.contains("torsion") || text.contains("二面角"))
+        && selected.len() >= 4
+    {
         return Some(Command::SetDihedralAngle {
             atom_ids: [selected[0], selected[1], selected[2], selected[3]],
             angle: value,
         });
     }
-    if (text.contains("bond angle") || text.contains("angle")) && selected.len() >= 3 {
+    if (text.contains("bond angle") || text.contains("angle") || text.contains("結合角"))
+        && selected.len() >= 3
+    {
         return Some(Command::SetBondAngle {
             atom_ids: [selected[0], selected[1], selected[2]],
             angle: value,
         });
     }
-    if (text.contains("bond length") || text.contains("distance")) && selected.len() >= 2 {
+    if (text.contains("bond length") || text.contains("distance") || text.contains("結合長"))
+        && selected.len() >= 2
+    {
         return Some(Command::SetBondLength {
             atom_ids: [selected[0], selected[1]],
             length: value,
@@ -836,18 +852,28 @@ fn infer_geometry_command(text: &str, context: &AiContext) -> Option<Command> {
 }
 
 fn parse_geometry_value(text: &str) -> Option<f64> {
-    text.split_whitespace()
-        .filter_map(|word| {
-            word.trim_matches(|char: char| {
-                matches!(
-                    char,
-                    ':' | '=' | ',' | ';' | '(' | ')' | '[' | ']' | 'a' | 'A' | '°'
-                )
-            })
-            .parse::<f64>()
-            .ok()
-        })
-        .last()
+    text.split(|char: char| {
+        matches!(
+            char,
+            ' ' | '　' | ':' | '=' | ',' | ';' | '(' | ')' | '[' | ']' | 'を' | 'に'
+        )
+    })
+    .filter_map(|part| {
+        let trimmed = part.trim_matches(|char: char| {
+            matches!(char, 'a' | 'A' | '°' | 'Å' | 'Å')
+        });
+        if trimmed.is_empty() {
+            return None;
+        }
+        // Handle cases like "1.42オングストローム"
+        let numeric_part = if let Some(index) = trimmed.find(|c: char| !c.is_ascii_digit() && c != '.') {
+            &trimmed[..index]
+        } else {
+            trimmed
+        };
+        numeric_part.parse::<f64>().ok()
+    })
+    .last()
 }
 
 fn dedupe_ai_commands(commands: Vec<Command>) -> Vec<Command> {
@@ -1419,6 +1445,46 @@ mod tests {
         );
 
         assert_eq!(state.domain.chemical_spec.molecule.bonds.len(), 2);
+    }
+
+    #[test]
+    fn uses_local_parser_for_japanese_request() {
+        let state = initial_app_state();
+        let context = build_ai_context(
+            &state,
+            None,
+        );
+        let result = propose_ai_commands("b3lypをセット", &context);
+        assert!(matches!(
+            result.commands.as_slice(),
+            [Command::SetMethod {
+                method: Method::B3LYP
+            }]
+        ));
+
+        let result = propose_ai_commands("水溶媒", &context);
+        assert!(matches!(
+            result.commands.as_slice(),
+            [Command::SetSolvent {
+                solvent: Some(Solvent::Water)
+            }]
+        ));
+    }
+
+    #[test]
+    fn uses_local_parser_for_japanese_geometry_request() {
+        let mut state = initial_app_state();
+        state.ui.selected_atoms = vec![1, 2];
+        let context = build_ai_context(&state, None);
+        let result = propose_ai_commands("結合長を1.42にする", &context);
+        
+        assert!(matches!(
+            result.commands.as_slice(),
+            [Command::SetBondLength {
+                atom_ids: [1, 2],
+                length
+            }] if (length - 1.42).abs() < 1e-9
+        ));
     }
 
     fn angle_degrees(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> Option<f64> {

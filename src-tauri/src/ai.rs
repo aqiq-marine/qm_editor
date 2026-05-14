@@ -100,18 +100,22 @@ fn system_prompt() -> &'static str {
 Return only one JSON object with this exact shape:
 {"commands":[],"explanation":"short explanation"}
 
-Allowed command type values:
-SET_METHOD, SET_BASIS, SET_JOB_TYPE, SET_SOLVENT, SET_CHARGE, SET_MULTIPLICITY,
-SET_BOND_LENGTH, SET_BOND_ANGLE, SET_DIHEDRAL_ANGLE, ADD_ATOM, DELETE_ATOM, ADD_BOND, DELETE_BOND.
+Allowed command types and their fields:
+- SET_METHOD: {"type": "SET_METHOD", "method": "B3LYP" | "WB97XD"}
+- SET_BASIS: {"type": "SET_BASIS", "basis": "6-31G(d)" | "def2-SVP" | "def2-TZVP"}
+- SET_JOB_TYPE: {"type": "SET_JOB_TYPE", "jobType": "opt" | "freq" | "opt+freq" | "ts"}
+- SET_SOLVENT: {"type": "SET_SOLVENT", "solvent": "THF" | "Water" | null}
+- SET_CHARGE: {"type": "SET_CHARGE", "charge": number}
+- SET_MULTIPLICITY: {"type": "SET_MULTIPLICITY", "multiplicity": number}
+- SET_BOND_LENGTH: {"type": "SET_BOND_LENGTH", "atomIds": [id1, id2], "length": number}
+- SET_BOND_ANGLE: {"type": "SET_BOND_ANGLE", "atomIds": [id1, id2, id3], "angle": number}
+- SET_DIHEDRAL_ANGLE: {"type": "SET_DIHEDRAL_ANGLE", "atomIds": [id1, id2, id3, id4], "angle": number}
+- ADD_ATOM: {"type": "ADD_ATOM", "element": string, "position": [x, y, z], "isotope"?: number, "nuclearSpin"?: number}
+- DELETE_ATOM: {"type": "DELETE_ATOM", "atomId": number}
+- ADD_BOND: {"type": "ADD_BOND", "atomIds": [id1, id2], "order": 1 | 2 | 3}
+- DELETE_BOND: {"type": "DELETE_BOND", "bondId": number}
 
-Use only values supported by the provided state:
-method: B3LYP or WB97XD
-basis: 6-31G(d), def2-SVP, or def2-TZVP
-jobType: opt, freq, opt+freq, or ts
-solvent: THF, Water, or null
-
-Use camelCase fields exactly as shown in the state. Never include SET_MOLECULE,
-TOGGLE_ATOM_SELECTION, CLEAR_SELECTION, markdown, comments, or extra text."#
+Use camelCase fields exactly as shown. For geometry changes (length, angle, dihedral), use IDs from the provided selectedAtoms if they match the required count. Never include markdown, comments, or extra text."#
 }
 
 fn extract_json_object(text: &str) -> Option<&str> {
