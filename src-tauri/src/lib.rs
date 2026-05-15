@@ -12,7 +12,7 @@ use reducer::{initial_app_state, reduce};
 use parser::parse_molecule_file;
 use gaussian::render_gaussian;
 use validation::validate_chemical_spec;
-use ai_commands::{build_ai_context, propose_ai_commands};
+use ai_commands::{build_ai_context, propose_commands_by_rules};
 
 #[tauri::command]
 fn get_initial_app_state() -> AppState {
@@ -52,13 +52,14 @@ fn build_ai_context_tauri(state: AppState, screenshot: Option<String>) -> AiCont
 }
 
 #[tauri::command]
-async fn propose_ai_commands_tauri(
+async fn propose_commands_via_ai_tauri(
     input: String,
     state: AppState,
     screenshot: Option<String>,
 ) -> Result<AiResult, String> {
     let context = build_ai_context(&state, screenshot);
-    Ok(propose_ai_commands(&input, &context))
+    let result = ai::propose_commands_via_ai(&input, &state, &context).await;
+    result
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -73,7 +74,7 @@ pub fn run() {
             render_gaussian_tauri,
             validate_chemical_spec_tauri,
             build_ai_context_tauri,
-            propose_ai_commands_tauri
+            propose_commands_via_ai_tauri
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

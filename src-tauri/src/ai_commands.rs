@@ -33,7 +33,7 @@ pub fn build_ai_context(state: &crate::domain::AppState, screenshot: Option<Stri
     }
 }
 
-pub fn propose_ai_commands(input: &str, context: &AiContext) -> AiResult {
+pub fn propose_commands_by_rules(input: &str, context: &AiContext) -> AiResult {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return AiResult {
@@ -46,76 +46,61 @@ pub fn propose_ai_commands(input: &str, context: &AiContext) -> AiResult {
         return result;
     }
 
+    // Strict grammar check: starts with "set"
     let normalized = trimmed.to_ascii_lowercase();
+    if !normalized.starts_with("set") {
+        return AiResult {
+            commands: Vec::new(),
+            explanation: "Invalid syntax. Commands must start with 'set'.".to_string(),
+        };
+    }
+
+    // Tokenize after 'set'
+    let content = &normalized[3..].trim();
+    let tokens: Vec<&str> = content.split_whitespace().collect();
+    
     let mut commands = Vec::new();
 
-    if normalized.contains("b3lyp") {
-        commands.push(Command::SetMethod {
-            method: Method::B3LYP,
-        });
+    for token in tokens {
+        if token.contains("b3lyp") {
+            commands.push(Command::SetMethod { method: Method::B3LYP });
+        } else if token.contains("wb97xd") {
+            commands.push(Command::SetMethod { method: Method::WB97XD });
+        } else if token.contains("6-31g(d)") {
+            commands.push(Command::SetBasis { basis: Basis::Six31Gd });
+        } else if token.contains("def2-svp") {
+            commands.push(Command::SetBasis { basis: Basis::Def2Svp });
+        } else if token.contains("def2-tzvp") {
+            commands.push(Command::SetBasis { basis: Basis::Def2Tzvp });
+        } else if token.contains("thf") {
+            commands.push(Command::SetSolvent { solvent: Some(Solvent::THF) });
+        } else if token.contains("water") {
+            commands.push(Command::SetSolvent { solvent: Some(Solvent::Water) });
+        } else if token.contains("no_solvent") || token.contains("gas_phase") {
+            commands.push(Command::SetSolvent { solvent: None });
+        } else if let Some(job_type) = infer_job_type_by_rules(token) {
+            commands.push(Command::SetJobType { job_type });
+        } else if let Some(charge) = parse_kv_by_rules(token, "charge") {
+            commands.push(Command::SetCharge { charge });
+        } else if let Some(mult) = parse_kv_by_rules(token, "multiplicity")
+            .or_else(|| parse_kv_by_rules(token, "mult"))
+        {
+            if let Ok(multiplicity) = u32::try_from(mult) {
+                commands.push(Command::SetMultiplicity { multiplicity });
+            }
+        }
     }
-    if normalized.contains("wb97xd") {
-        commands.push(Command::SetMethod {
-            method: Method::WB97XD,
-        });
-    }
-
-    if normalized.contains("6-31g(d)") {
-        commands.push(Command::SetBasis {
-            basis: Basis::Six31Gd,
-        });
-    }
-    if normalized.contains("def2-svp") {
-        commands.push(Command::SetBasis {
-            basis: Basis::Def2Svp,
-        });
-    }
-    if normalized.contains("def2-tzvp") {
-        commands.push(Command::SetBasis {
-            basis: Basis::Def2Tzvp,
-        });
-    }
-
-    if normalized.contains("thf") {
-        commands.push(Command::SetSolvent {
-            solvent: Some(Solvent::THF),
-        });
-    }
-    if normalized.contains("water") {
-        commands.push(Command::SetSolvent {
-            solvent: Some(Solvent::Water),
-        });
-    }
-    if normalized.contains("no solvent") || normalized.contains("gas phase") {
-        commands.push(Command::SetSolvent { solvent: None });
-    }
-
-    if let Some(job_type) = infer_job_type(&normalized) {
-        commands.push(Command::SetJobType { job_type });
-    }
-    if let Some(charge) = parse_number_after(&normalized, "charge") {
-        commands.push(Command::SetCharge { charge });
-    }
-    if let Some(multiplicity) = parse_number_after(&normalized, "multiplicity")
-        .or_else(|| parse_number_after(&normalized, "mult"))
-        .and_then(|value| u32::try_from(value).ok())
-    {
-        commands.push(Command::SetMultiplicity { multiplicity });
-    }
-    if let Some(command) = infer_geometry_command(&normalized, context) {
+    
+    // Geometry commands might span multiple tokens, handled separately if not strictly positional
+    if let Some(command) = infer_geometry_command_by_rules(&normalized, context) {
         commands.push(command);
     }
 
-    let unique_commands = dedupe_ai_commands(commands);
+    let unique_commands = dedupe_commands_by_rules(commands);
     let explanation = if unique_commands.is_empty() {
-        "No supported changes were found. Try mentioning method, basis, job type, solvent, charge, multiplicity, bond length, bond angle, or dihedral angle."
-            .to_string()
+        "Valid 'set' command detected, but no recognizable parameters found.".to_string()
     } else {
-        format!(
-            "Proposed {} command(s) from the request. Current method is {}.",
-            unique_commands.len(),
-            method_name(context.calculation.method)
-        )
+        format!("Proposed {} command(s).", unique_commands.len())
     };
 
     AiResult {
@@ -123,6 +108,15 @@ pub fn propose_ai_commands(input: &str, context: &AiContext) -> AiResult {
         explanation,
     }
 }
+
+fn parse_kv_by_rules(token: &str, keyword: &str) -> Option<i32> {
+    if token.starts_with(keyword) {
+        let val = token.trim_start_matches(keyword).trim_matches(|c| c == ':' || c == '=');
+        return val.parse::<i32>().ok();
+    }
+    None
+}
+
 
 pub fn parse_ai_result_json(text: &str) -> Result<AiResult, String> {
     let parsed = serde_json::from_str::<AiResult>(text).map_err(|error| error.to_string())?;
@@ -164,7 +158,7 @@ fn is_ai_command(command: &Command) -> bool {
     )
 }
 
-fn infer_job_type(text: &str) -> Option<JobType> {
+fn infer_job_type_by_rules(text: &str) -> Option<JobType> {
     if text.contains("transition state")
         || text.split_whitespace().any(|token| token == "ts")
     {
@@ -183,7 +177,7 @@ fn infer_job_type(text: &str) -> Option<JobType> {
     }
 }
 
-fn parse_number_after(text: &str, keyword: &str) -> Option<i32> {
+fn parse_number_after_by_rules(text: &str, keyword: &str) -> Option<i32> {
     let words = text.split_whitespace().collect::<Vec<_>>();
     for (index, word) in words.iter().enumerate() {
         if *word == keyword {
@@ -210,8 +204,8 @@ fn parse_number_after(text: &str, keyword: &str) -> Option<i32> {
     None
 }
 
-fn infer_geometry_command(text: &str, context: &AiContext) -> Option<Command> {
-    let value = parse_geometry_value(text)?;
+fn infer_geometry_command_by_rules(text: &str, context: &AiContext) -> Option<Command> {
+    let value = parse_geometry_value_by_rules(text)?;
     let selected = context
         .selected_atoms
         .iter()
@@ -246,7 +240,7 @@ fn infer_geometry_command(text: &str, context: &AiContext) -> Option<Command> {
     None
 }
 
-fn parse_geometry_value(text: &str) -> Option<f64> {
+fn parse_geometry_value_by_rules(text: &str) -> Option<f64> {
     text.split(|char: char| {
         matches!(
             char,
@@ -271,7 +265,7 @@ fn parse_geometry_value(text: &str) -> Option<f64> {
     .last()
 }
 
-fn dedupe_ai_commands(commands: Vec<Command>) -> Vec<Command> {
+fn dedupe_commands_by_rules(commands: Vec<Command>) -> Vec<Command> {
     let mut unique = Vec::new();
     let mut method = None;
     let mut basis = None;

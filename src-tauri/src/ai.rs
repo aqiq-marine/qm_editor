@@ -2,7 +2,7 @@ use rig::{completion::Prompt, prelude::*, providers::gemini};
 use serde::Serialize;
 
 use crate::domain::{AiContext, AiResult, AppState};
-use crate::ai_commands::{propose_ai_commands as ai_propose, parse_ai_result_json};
+use crate::ai_commands::{propose_commands_by_rules as propose_by_rules, parse_ai_result_json};
 
 const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash-lite";
 
@@ -25,13 +25,13 @@ impl AiProvider {
     }
 }
 
-pub async fn propose_ai_commands(
+pub async fn propose_commands_via_ai(
     input: &str,
     _state: &AppState,
     context: &AiContext,
 ) -> Result<AiResult, String> {
     if input.trim().is_empty() {
-        return Ok(ai_propose(input, context));
+        return Ok(propose_by_rules(input, context));
     }
 
     if let Ok(result) = parse_ai_result_json(input.trim()) {
@@ -48,7 +48,7 @@ pub async fn propose_ai_commands(
 }
 
 fn local_result_for_supported_request(input: &str, context: &AiContext) -> Option<AiResult> {
-    let result = ai_propose(input, context);
+    let result = propose_by_rules(input, context);
     (!result.commands.is_empty()).then_some(result)
 }
 

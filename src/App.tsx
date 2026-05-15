@@ -32,8 +32,8 @@ function EditorShell() {
   useEffect(() => {
     if (!state) return;
     const spec = state.domain.chemicalSpec;
-    void invoke<string>("render_gaussian", { spec }).then(setGaussian);
-    void invoke<ValidationMessage[]>("validate_chemical_spec", { spec }).then(setMessages);
+    void invoke<string>("render_gaussian_tauri", { spec }).then(setGaussian);
+    void invoke<ValidationMessage[]>("validate_chemical_spec_tauri", { spec }).then(setMessages);
   }, [state]);
 
   if (!state) {
@@ -82,7 +82,7 @@ function ImportControl() {
     if (!file) return;
     try {
       const text = await file.text();
-      const molecule = await invoke<Molecule>("parse_molecule_file", { fileName: file.name, text });
+      const molecule = await invoke<Molecule>("parse_molecule_file_tauri", { fileName: file.name, text });
       await dispatchCommand({ type: "SET_MOLECULE", molecule });
       setError("");
     } catch (caught) {
@@ -536,7 +536,7 @@ function AIAssistant() {
   function generateCommands() {
     if (!state) return;
     setError("");
-    void invoke<AIResult>("propose_ai_commands", {
+    void invoke<AIResult>("propose_commands_via_ai_tauri", {
       input: request,
       state,
       screenshot,
