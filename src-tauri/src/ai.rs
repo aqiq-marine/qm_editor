@@ -134,7 +134,8 @@ impl Tool for InspectFragment {
     }
 }
 
-const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash";
+// const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash";
+const DEFAULT_GEMINI_MODEL: &str = "gemini-3.1-flash-lite-preview";
 
 #[derive(Clone, Copy, Debug)]
 enum AiProvider {
@@ -193,7 +194,7 @@ async fn propose_with_gemini(
     let client = gemini::Client::new(api_key).map_err(|error| error.to_string())?;
     let model = std::env::var("QM_EDITOR_GEMINI_MODEL")
         .unwrap_or_else(|_| DEFAULT_GEMINI_MODEL.to_string());
-    let max_turns = 3;
+    let max_turns = 10;
     let agent = client
         .agent(model)
         .preamble(system_prompt())
@@ -271,14 +272,15 @@ Allowed command types and their fields:
 - DELETE_BOND: {"type": "DELETE_BOND", "bondId": number}
 - PLACE_TEMPLATE: {"type": "PLACE_TEMPLATE", "templateName": string, "position": [x, y, z], "direction": [dx, dy, dz]}
 - ATTACH_FRAGMENT: {"type": "ATTACH_FRAGMENT", "fragmentName": string, "targetAtomId": number, "rotationAngle": number, "orientation": [x, y, z]}
-- SUBSTITUTE_BY_FRAGMENT: {"type": "SUBSTITUTE_BY_FRAGMENT", "fragmentName": string, "targetBondId": number, "rotationAngle": number}
+- SUBSTITUTE_BY_FRAGMENT: {"type": "SUBSTITUTE_BY_FRAGMENT", "fragmentName": string, "startAtomId": number, "endAtomId": number}
 
 Use camelCase fields exactly as shown. 
 - Always list available templates/fragments first if the user wants to add/substitute them.
 - Use 'inspect_template' for standard molecules.
-- Use 'inspect_fragment' to decide if to use ATTACH_FRAGMENT (portType: 'atom') or SUBSTITUTE_BY_FRAGMENT (portType: 'bond').
-- If 'atom' type port is found in fragment, use ATTACH_FRAGMENT.
-- If 'bond' type port is found in fragment, use SUBSTITUTE_BY_FRAGMENT.
+- Use 'inspect_fragment' to decide between ATTACH_FRAGMENT and SUBSTITUTE_BY_FRAGMENT.
+- If a fragment has a 'bond' type port, SUBSTITUTE_BY_FRAGMENT must be used as the preferred method for integrating fragments.
+- Only use ATTACH_FRAGMENT if a 'bond' type port is not available and an 'atom' type port exists.
+- SUBSTITUTE_BY_FRAGMENT provides a more chemically accurate integration by replacing existing bonds.
 - Never include markdown, comments, or extra text in your final JSON response."#
 }
 

@@ -152,8 +152,10 @@ pub enum Solvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PortType {
-    Atom,
-    Bond,
+    #[serde(rename_all = "camelCase")]
+    Atom { target_id: u32 },
+    #[serde(rename_all = "camelCase")]
+    Bond { start_atom_id: u32, end_atom_id: u32 },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -161,7 +163,6 @@ pub enum PortType {
 pub struct AttachPort {
     pub id: String,
     pub port_type: PortType,
-    pub target_id: u32,
     pub recommended_usage: String,
 }
 
@@ -242,8 +243,8 @@ pub enum Command {
     },
     SubstituteByFragment {
         fragment_name: String,
-        target_bond_id: u32,
-        rotation_angle: f64,
+        start_atom_id: u32,
+        end_atom_id: u32,
     },
     SetMolecule {
         molecule: Molecule,

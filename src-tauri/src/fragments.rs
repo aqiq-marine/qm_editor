@@ -11,6 +11,8 @@ pub fn list_available_fragments() -> Vec<FragmentDefinition> {
             if let Ok(content) = fs::read_to_string(entry.path()) {
                 if let Ok(def) = serde_json::from_str::<FragmentDefinition>(&content) {
                     fragments.push(def);
+                } else {
+                    println!("hoge: {:?}", serde_json::from_str::<FragmentDefinition>(&content));
                 }
             }
         }

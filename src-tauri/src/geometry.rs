@@ -84,3 +84,57 @@ pub fn covalent_radius(element: Element) -> f64 {
         _ => 0.75,
     }
 }
+
+pub fn rotation_from_to(from: [f64; 3], to: [f64; 3]) -> [[f64; 3]; 3] {
+    let axis = cross(from, to);
+    let s = length(axis);
+    let c = dot(from, to);
+
+    if s < 1e-6 {
+        return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    }
+
+    let vx = [[0.0, -axis[2], axis[1]], [axis[2], 0.0, -axis[0]], [-axis[1], axis[0], 0.0]];
+    let vx2 = mat_mul(vx, vx);
+    add_mat([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], add_mat(vx, scale_mat(vx2, (1.0 - c) / s.powi(2))))
+}
+
+pub fn rotate_vec(rotation: [[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
+    [
+        dot(rotation[0], v),
+        dot(rotation[1], v),
+        dot(rotation[2], v),
+    ]
+}
+
+pub fn mat_mul(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let mut res = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            for k in 0..3 {
+                res[i][j] += a[i][k] * b[k][j];
+            }
+        }
+    }
+    res
+}
+
+pub fn add_mat(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let mut res = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            res[i][j] = a[i][j] + b[i][j];
+        }
+    }
+    res
+}
+
+pub fn scale_mat(a: [[f64; 3]; 3], s: f64) -> [[f64; 3]; 3] {
+    let mut res = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            res[i][j] = a[i][j] * s;
+        }
+    }
+    res
+}

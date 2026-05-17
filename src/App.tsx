@@ -126,6 +126,17 @@ function MoleculeViewer() {
     viewer.removeAllLabels();
     viewer.addModel(moleculeToXyz(molecule), "xyz");
     viewer.setStyle({}, { stick: { radius: 0.15 }, sphere: { scale: 0.34 } });
+
+    for (const atom of molecule.atoms) {
+      viewer.addLabel(atom.id.toString(), {
+        position: { x: atom.position[0], y: atom.position[1], z: atom.position[2] },
+        backgroundColor: "white",
+        backgroundOpacity: 0.5,
+        fontSize: 12,
+        fontColor: "black",
+      });
+    }
+
     for (const atomId of selected) {
       viewer.setStyle(
         { index: atomId - 1 },
