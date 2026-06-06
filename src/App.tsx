@@ -1,36 +1,33 @@
 import { useEffect, useRef, useState } from "react";
 import { createViewer, type AtomSpec, type GLViewer } from "3dmol";
-import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 import { useAppStore } from "./app/store";
-import type { AICommand, AIResult } from "./domain/commands";
+import type { AICommand } from "./domain/commands";
+import {
+  commands,
+  type Element,
+  type Molecule,
+  type Solvent,
+  type ValidationMessage,
+  type TemplateSummary,
+  type FragmentDefinition,
+  type SubstituteByFragmentCompletion,
+  type YoloPlanStep,
+  type YoloStepProposal,
+  type AiResult,
+} from "./bindings";
 import {
   supportedBases,
   supportedElements,
   supportedJobTypes,
   supportedMethods,
   supportedSolvents,
-  type Element,
-  type Molecule,
-  type Solvent,
-  type ValidationMessage,
 } from "./domain/chemicalSpec";
-
-type TemplateSummary = {
-  name: string;
-  displayName: string;
-  description: string;
-};
 
 type FragmentSummary = {
   name: string;
   displayName: string;
   description: string;
-};
-
-type SubstituteByFragmentCompletion = {
-  startAtomId: number;
-  endAtomId: number;
 };
 
 function App() {
@@ -49,8 +46,8 @@ function EditorShell() {
   useEffect(() => {
     if (!state) return;
     const spec = state.domain.chemicalSpec;
-    void invoke<string>("render_gaussian_tauri", { spec }).then(setGaussian);
-    void invoke<ValidationMessage[]>("validate_chemical_spec_tauri", { spec }).then(setMessages);
+    void commands.renderGaussianTauri(spec).then(setGaussian);
+    void commands.validateChemicalSpecTauri(spec).then(setMessages);
   }, [state]);
 
   if (!state) {
@@ -103,8 +100,9 @@ function ImportControl() {
     if (!file) return;
     try {
       const text = await file.text();
-      const molecule = await invoke<Molecule>("parse_molecule_file_tauri", { fileName: file.name, text });
-      await dispatchCommand({ type: "SET_MOLECULE", molecule });
+      const result = await commands.parseMoleculeFileTauri(file.name, text);
+      if (result.status === "error") throw new Error(result.error);
+      await dispatchCommand({ type: "SET_MOLECULE", molecule: result.data });
       setError("");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Failed to import molecule.");
@@ -422,11 +420,11 @@ function TemplateFragmentTools() {
   const [substitutionCompletion, setSubstitutionCompletion] = useState<SubstituteByFragmentCompletion | null>(null);
 
   useEffect(() => {
-    void invoke<TemplateSummary[]>("list_available_templates_tauri").then((availableTemplates) => {
+    void commands.listAvailableTemplatesTauri().then((availableTemplates) => {
       setTemplates(availableTemplates);
       setTemplateName((current) => current || availableTemplates[0]?.name || "");
     });
-    void invoke<FragmentSummary[]>("list_available_fragments_tauri").then((availableFragments) => {
+    void commands.listAvailableFragmentsTauri().then((availableFragments) => {
       setFragments(availableFragments);
       setFragmentName((current) => current || availableFragments[0]?.name || "");
     });
@@ -440,10 +438,10 @@ function TemplateFragmentTools() {
 
     const molecule = state.domain.chemicalSpec.molecule;
     const selectedAtomId = state.ui.selectedAtoms[0];
-    void invoke<SubstituteByFragmentCompletion | null>("infer_substitute_by_fragment_completion_tauri", {
+    void commands.inferSubstituteByFragmentCompletionTauri(
       molecule,
       selectedAtomId,
-    }).then(setSubstitutionCompletion);
+    ).then(setSubstitutionCompletion);
   }, [state]);
 
   if (!state) return null;
@@ -788,12 +786,15 @@ function AIAssistant() {
     setResult(null);
 
     const screenshot = captureScreenshot();
-    void invoke<AIResult>("propose_commands_via_ai_tauri", {
-      input: request,
+    void commands.proposeCommandsViaAiTauri(
+      request,
       state,
-      screenshot,
-    })
-      .then(setResult)
+      screenshot ?? null,
+    )
+      .then((result) => {
+        if (result.status === "error") throw new Error(result.error);
+        setResult(result.data);
+      })
       .catch((caught) => {
         setResult(null);
         setError(typeof caught === "string" ? caught : "Failed to generate AI commands.");
@@ -817,7 +818,7 @@ function AIAssistant() {
     setYoloRunning(true);
 
     try {
-      const plan = await invoke<YoloPlanStep[]>("plan_yolo_steps_tauri", { input: request });
+      const plan = await commands.planYoloStepsTauri(request);
       const plannedSteps = plan.map((step) => ({ ...step, status: "pending" as const }));
       setYoloSteps(plannedSteps);
 
@@ -830,14 +831,16 @@ function AIAssistant() {
         const beforeScreenshot = captureScreenshot();
         setYoloSteps((current) => updateYoloStep(current, step.id, { status: "running", beforeScreenshot }));
 
-        const proposal = await invoke<YoloStepProposal>("propose_yolo_step_tauri", {
-          input: request,
-          state: liveState,
-          screenshot: beforeScreenshot,
+        const proposalResult = await commands.proposeYoloStepTauri(
+          request,
+          liveState,
+          beforeScreenshot ?? null,
           plan,
-          step: stepPlan,
+          stepPlan,
           history,
-        });
+        );
+        if (proposalResult.status === "error") throw new Error(proposalResult.error);
+        const proposal = proposalResult.data;
         setYoloSteps((current) => updateYoloStep(current, step.id, { prompt: proposal.prompt }));
 
         if (proposal.resolvedCommands.length > 0) {

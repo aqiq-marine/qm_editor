@@ -605,7 +605,7 @@ pub enum ValidationLevel {
     Warning,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Type)]
 pub enum DoubleBondConfiguration {
     E,
     Z,
