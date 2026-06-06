@@ -766,7 +766,7 @@ type YoloStepProposal = AIResult & {
 };
 
 function AIAssistant() {
-  const { state, applyCommands, undo, canUndo } = useAppStore();
+  const { state, applyCommands, undo } = useAppStore();
   const [request, setRequest] = useState("");
   const [result, setResult] = useState<AIResult | null>(null);
   const [error, setError] = useState("");
@@ -818,7 +818,9 @@ function AIAssistant() {
     setYoloRunning(true);
 
     try {
-      const plan = await commands.planYoloStepsTauri(request);
+      const planResult = await commands.planYoloStepsTauri(request);
+      if (planResult.status === "error") throw new Error(planResult.error);
+      const plan = planResult.data;
       const plannedSteps = plan.map((step) => ({ ...step, status: "pending" as const }));
       setYoloSteps(plannedSteps);
 
@@ -883,7 +885,7 @@ function AIAssistant() {
     <section className="assistant-panel" aria-label="AI assistant">
       <div className="panel-heading">
         <h2>AI Assistant</h2>
-        <button type="button" disabled={!canUndo()} onClick={undo}>
+        <button type="button" onClick={() => void undo()}>
           Undo
         </button>
       </div>

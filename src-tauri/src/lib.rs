@@ -8,9 +8,12 @@ pub mod gaussian;
 pub mod geometry;
 pub mod parser;
 pub mod reducer;
+pub mod state_manager;
 pub mod templates;
 pub mod validation;
 
+use state_manager::StateManager;
+use std::sync::Mutex;
 use ai_commands::{build_ai_context, resolve_atom_references};
 use domain::{
     AiContext, AiProposal, AppState, ChemicalSpec, Command, FragmentDefinition, Molecule,
@@ -70,8 +73,35 @@ fn ordered_benzene_ring_carbons_tauri(molecule: Molecule) -> Option<Vec<u32>> {
 
 #[tauri::command]
 #[specta::specta]
-fn get_initial_app_state() -> AppState {
-    initial_app_state()
+fn get_state_tauri(state: tauri::State<'_, Mutex<StateManager>>) -> AppState {
+    state.lock().unwrap().get_state().clone()
+}
+
+#[tauri::command]
+#[specta::specta]
+fn apply_command_tauri(
+    command: Command,
+    state: tauri::State<'_, Mutex<StateManager>>,
+) -> AppState {
+    let mut manager = state.lock().unwrap();
+    manager.apply_command(command);
+    manager.get_state().clone()
+}
+
+#[tauri::command]
+#[specta::specta]
+fn undo_tauri(state: tauri::State<'_, Mutex<StateManager>>) -> AppState {
+    let mut manager = state.lock().unwrap();
+    manager.undo();
+    manager.get_state().clone()
+}
+
+#[tauri::command]
+#[specta::specta]
+fn redo_tauri(state: tauri::State<'_, Mutex<StateManager>>) -> AppState {
+    let mut manager = state.lock().unwrap();
+    manager.redo();
+    manager.get_state().clone()
 }
 // ... (rest of the file)
 
@@ -132,8 +162,10 @@ async fn propose_commands_via_ai_tauri(
 
 #[tauri::command]
 #[specta::specta]
-fn plan_yolo_steps_tauri(input: String) -> Vec<YoloPlanStep> {
-    ai::build_yolo_plan(&input)
+async fn plan_yolo_steps_tauri(input: String) -> Result<Vec<YoloPlanStep>, String> {
+    let fragments = list_available_fragments();
+    let templates = list_available_templates();
+    ai::plan_yolo_steps_ai(&input, &fragments, &templates).await
 }
 
 #[tauri::command]
@@ -169,7 +201,10 @@ pub fn run() {
         infer_substitute_by_fragment_completion_tauri,
         match_functional_groups_tauri,
         ordered_benzene_ring_carbons_tauri,
-        get_initial_app_state,
+        get_state_tauri,
+        apply_command_tauri,
+        undo_tauri,
+        redo_tauri,
         apply_command,
         apply_commands,
         parse_molecule_file_tauri,
@@ -187,6 +222,7 @@ pub fn run() {
         .expect("Failed to export typescript bindings");
 
     tauri::Builder::default()
+        .manage(Mutex::new(StateManager::new()))
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {

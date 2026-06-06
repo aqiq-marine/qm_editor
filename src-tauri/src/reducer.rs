@@ -227,6 +227,8 @@ pub fn reduce(mut state: AppState, command: Command) -> AppState {
             }
         }
         Command::ClearSelection => state.ui.selected_atoms.clear(),
+        Command::Undo => {}
+        Command::Redo => {}
     }
     state
 }

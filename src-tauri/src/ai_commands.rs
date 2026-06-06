@@ -287,6 +287,10 @@ pub fn propose_commands_by_rules(input: &str, context: &AiContext) -> AiResult {
             commands.push(Command::SetMethod {
                 method: Method::WB97XD,
             });
+        } else if token.contains("undo") {
+            commands.push(Command::Undo);
+        } else if token.contains("redo") {
+            commands.push(Command::Redo);
         } else if token.contains("6-31g(d)") {
             commands.push(Command::SetBasis {
                 basis: Basis::Six31Gd,
@@ -546,6 +550,8 @@ fn resolve_command_atom_references(
             atom_id: resolve_display_index(context, atom_id)?,
             element,
         },
+        Command::Undo => Command::Undo,
+        Command::Redo => Command::Redo,
         other => other,
     };
     Ok(resolved)
@@ -640,7 +646,9 @@ fn dedupe_commands_by_rules(commands: Vec<Command>) -> Vec<Command> {
             | Command::PlaceTemplate { .. }
             | Command::AttachFragment { .. }
             | Command::SubstituteByFragment { .. }
-            | Command::ReplaceAtom { .. } => unique.push(command),
+            | Command::ReplaceAtom { .. }
+            | Command::Undo
+            | Command::Redo => unique.push(command),
             Command::SetMolecule { .. }
             | Command::ToggleAtomSelection { .. }
             | Command::ClearSelection => {}

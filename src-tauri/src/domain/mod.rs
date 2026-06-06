@@ -465,6 +465,8 @@ pub enum Command {
         atom_id: u32,
         element: Element,
     },
+    Undo,
+    Redo,
     SetMolecule {
         molecule: Molecule,
     },

@@ -52,7 +52,9 @@ export type Command =
     }
   | { type: "SET_MOLECULE"; molecule: Molecule }
   | { type: "TOGGLE_ATOM_SELECTION"; atomId: number }
-  | { type: "CLEAR_SELECTION" };
+  | { type: "CLEAR_SELECTION" }
+  | { type: "UNDO" }
+  | { type: "REDO" };
 
 export type AICommand = Exclude<
   Command,
@@ -88,6 +90,8 @@ export const commandSchema = {
     { type: "object", properties: { type: { const: "SET_MOLECULE" }, molecule: { type: "object" } }, required: ["type", "molecule"], additionalProperties: false },
     { type: "object", properties: { type: { const: "TOGGLE_ATOM_SELECTION" }, atomId: { type: "number" } }, required: ["type", "atomId"], additionalProperties: false },
     { type: "object", properties: { type: { const: "CLEAR_SELECTION" } }, required: ["type"], additionalProperties: false },
+    { type: "object", properties: { type: { const: "UNDO" } }, required: ["type"], additionalProperties: false },
+    { type: "object", properties: { type: { const: "REDO" } }, required: ["type"], additionalProperties: false },
   ],
 } as const;
 

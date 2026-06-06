@@ -1,53 +1,42 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
 import { type AppState } from "../domain/chemicalSpec";
 import type { Command } from "../domain/commands";
+import { commands } from "../bindings";
 
 type AppStore = {
   state: AppState | null;
-  past: AppState[];
   loadInitialState: () => Promise<void>;
   dispatchCommand: (command: Command) => Promise<void>;
   applyCommands: (commands: Command[]) => Promise<void>;
-  undo: () => void;
-  canUndo: () => boolean;
+  undo: () => Promise<void>;
+  redo: () => Promise<void>;
 };
 
-export const useAppStore = create<AppStore>((set, get) => ({
+export const useAppStore = create<AppStore>((set) => ({
   state: null,
-  past: [],
   loadInitialState: async () => {
-    if (get().state) return;
-    const state = await invoke<AppState>("get_initial_app_state");
-    set({ state, past: [] });
+    const state = await commands.getStateTauri();
+    set({ state });
   },
   dispatchCommand: async (command) => {
-    const current = get().state;
-    if (!current) return;
-    const next = await invoke<AppState>("apply_command", { state: current, command });
-    set(({ past }) => ({
-      state: next,
-      past: [...past, current].slice(-30),
-    }));
+    const nextState = await commands.applyCommandTauri(command);
+    set({ state: nextState });
   },
-  applyCommands: async (commands) => {
-    if (commands.length === 0) return;
-    const current = get().state;
-    if (!current) return;
-    const next = await invoke<AppState>("apply_commands", { state: current, commands });
-    set(({ past }) => ({
-      state: next,
-      past: [...past, current].slice(-30),
-    }));
+  applyCommands: async (cmds) => {
+    let nextState = null;
+    for (const command of cmds) {
+      nextState = await commands.applyCommandTauri(command);
+    }
+    if (nextState) {
+      set({ state: nextState });
+    }
   },
-  undo: () =>
-    set(({ state, past }) => {
-      const previous = past[past.length - 1];
-      if (!previous) return { state, past };
-      return {
-        state: previous,
-        past: past.slice(0, -1),
-      };
-    }),
-  canUndo: () => get().past.length > 0,
+  undo: async () => {
+    const nextState = await commands.undoTauri();
+    set({ state: nextState });
+  },
+  redo: async () => {
+    const nextState = await commands.redoTauri();
+    set({ state: nextState });
+  },
 }));

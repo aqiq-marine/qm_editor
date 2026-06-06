@@ -23,8 +23,17 @@ async matchFunctionalGroupsTauri(molecule: Molecule) : Promise<FunctionalGroupMa
 async orderedBenzeneRingCarbonsTauri(molecule: Molecule) : Promise<number[] | null> {
     return await TAURI_INVOKE("ordered_benzene_ring_carbons_tauri", { molecule });
 },
-async getInitialAppState() : Promise<AppState> {
-    return await TAURI_INVOKE("get_initial_app_state");
+async getStateTauri() : Promise<AppState> {
+    return await TAURI_INVOKE("get_state_tauri");
+},
+async applyCommandTauri(command: Command) : Promise<AppState> {
+    return await TAURI_INVOKE("apply_command_tauri", { command });
+},
+async undoTauri() : Promise<AppState> {
+    return await TAURI_INVOKE("undo_tauri");
+},
+async redoTauri() : Promise<AppState> {
+    return await TAURI_INVOKE("redo_tauri");
 },
 async applyCommand(state: AppState, command: Command) : Promise<AppState> {
     return await TAURI_INVOKE("apply_command", { state, command });
@@ -57,8 +66,13 @@ async proposeCommandsViaAiTauri(input: string, state: AppState, screenshot: stri
     else return { status: "error", error: e  as any };
 }
 },
-async planYoloStepsTauri(input: string) : Promise<YoloPlanStep[]> {
-    return await TAURI_INVOKE("plan_yolo_steps_tauri", { input });
+async planYoloStepsTauri(input: string) : Promise<Result<YoloPlanStep[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("plan_yolo_steps_tauri", { input }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 async proposeYoloStepTauri(input: string, state: AppState, screenshot: string | null, plan: YoloPlanStep[], step: YoloPlanStep, history: YoloStepHistoryEntry[]) : Promise<Result<YoloStepProposal, string>> {
     try {
@@ -92,7 +106,7 @@ export type Bond = { id: number; atomIds: [number, number]; order: number }
 export type CalculationSpec = { jobType: JobType; method: Method; basis: Basis; solvent: Solvent | null; charge: number; multiplicity: number }
 export type CalculationSummary = { jobType: JobType; method: Method; basis: Basis; solvent: Solvent | null; charge: number; multiplicity: number }
 export type ChemicalSpec = { molecule: Molecule; calculation: CalculationSpec }
-export type Command = { type: "SET_METHOD"; method: Method } | { type: "SET_BASIS"; basis: Basis } | { type: "SET_JOB_TYPE"; job_type: JobType } | { type: "SET_SOLVENT"; solvent: Solvent | null } | { type: "SET_CHARGE"; charge: number } | { type: "SET_MULTIPLICITY"; multiplicity: number } | { type: "SET_BOND_LENGTH"; atom_ids: [number, number]; length: number; mode?: GeometryEditMode } | { type: "SET_BOND_ANGLE"; atom_ids: [number, number, number]; angle: number; mode?: GeometryEditMode } | { type: "SET_DIHEDRAL_ANGLE"; atom_ids: [number, number, number, number]; angle: number; mode?: GeometryEditMode } | { type: "ADD_ATOM"; element: Element; position: [number, number, number]; isotope: MassNumber | null; nuclear_spin: TwiceSpin | null; formal_charge?: number } | { type: "SET_ATOM_FORMAL_CHARGE"; atom_id: number; formal_charge: number } | { type: "DELETE_ATOM"; atom_id: number } | { type: "ADD_BOND"; atom_ids: [number, number]; order: number } | { type: "DELETE_BOND"; bond_id: number } | { type: "PLACE_TEMPLATE"; template_name: string; position: [number, number, number]; direction: [number, number, number] } | { type: "ATTACH_FRAGMENT"; fragment_name: string; target_atom_id: number; rotation_angle: number; orientation: [number, number, number] } | { type: "SUBSTITUTE_BY_FRAGMENT"; fragment_name: string; start_atom_id: number; end_atom_id: number } | { type: "REPLACE_ATOM"; atom_id: number; element: Element } | { type: "SET_MOLECULE"; molecule: Molecule } | { type: "TOGGLE_ATOM_SELECTION"; atom_id: number } | { type: "CLEAR_SELECTION" }
+export type Command = { type: "SET_METHOD"; method: Method } | { type: "SET_BASIS"; basis: Basis } | { type: "SET_JOB_TYPE"; job_type: JobType } | { type: "SET_SOLVENT"; solvent: Solvent | null } | { type: "SET_CHARGE"; charge: number } | { type: "SET_MULTIPLICITY"; multiplicity: number } | { type: "SET_BOND_LENGTH"; atom_ids: [number, number]; length: number; mode?: GeometryEditMode } | { type: "SET_BOND_ANGLE"; atom_ids: [number, number, number]; angle: number; mode?: GeometryEditMode } | { type: "SET_DIHEDRAL_ANGLE"; atom_ids: [number, number, number, number]; angle: number; mode?: GeometryEditMode } | { type: "ADD_ATOM"; element: Element; position: [number, number, number]; isotope: MassNumber | null; nuclear_spin: TwiceSpin | null; formal_charge?: number } | { type: "SET_ATOM_FORMAL_CHARGE"; atom_id: number; formal_charge: number } | { type: "DELETE_ATOM"; atom_id: number } | { type: "ADD_BOND"; atom_ids: [number, number]; order: number } | { type: "DELETE_BOND"; bond_id: number } | { type: "PLACE_TEMPLATE"; template_name: string; position: [number, number, number]; direction: [number, number, number] } | { type: "ATTACH_FRAGMENT"; fragment_name: string; target_atom_id: number; rotation_angle: number; orientation: [number, number, number] } | { type: "SUBSTITUTE_BY_FRAGMENT"; fragment_name: string; start_atom_id: number; end_atom_id: number } | { type: "REPLACE_ATOM"; atom_id: number; element: Element } | { type: "UNDO" } | { type: "REDO" } | { type: "SET_MOLECULE"; molecule: Molecule } | { type: "TOGGLE_ATOM_SELECTION"; atom_id: number } | { type: "CLEAR_SELECTION" }
 export type DomainState = { chemicalSpec: ChemicalSpec }
 export type Element = "H" | "He" | "Li" | "Be" | "B" | "C" | "N" | "O" | "F" | "Ne" | "Na" | "Mg" | "Al" | "Si" | "P" | "S" | "Cl" | "Ar" | "K" | "Ca" | "Sc" | "Ti" | "V" | "Cr" | "Mn" | "Fe" | "Co" | "Ni" | "Cu" | "Zn" | "Ga" | "Ge" | "As" | "Se" | "Br" | "Kr" | "Rb" | "Sr" | "Y" | "Zr" | "Nb" | "Mo" | "Tc" | "Ru" | "Rh" | "Pd" | "Ag" | "Cd" | "In" | "Sn" | "Sb" | "Te" | "I" | "Xe" | "Cs" | "Ba" | "La" | "Ce" | "Pr" | "Nd" | "Pm" | "Sm" | "Eu" | "Gd" | "Tb" | "Dy" | "Ho" | "Er" | "Tm" | "Yb" | "Lu" | "Hf" | "Ta" | "W" | "Re" | "Os" | "Ir" | "Pt" | "Au" | "Hg" | "Tl" | "Pb" | "Bi" | "Po" | "At" | "Rn" | "Fr" | "Ra" | "Ac" | "Th" | "Pa" | "U" | "Np" | "Pu" | "Am" | "Cm" | "Bk" | "Cf" | "Es" | "Fm" | "Md" | "No" | "Lr" | "Rf" | "Db" | "Sg" | "Bh" | "Hs" | "Mt" | "Ds" | "Rg" | "Cn" | "Nh" | "Fl" | "Mc" | "Lv" | "Ts" | "Og"
 export type FragmentDefinition = { name: string; displayName: string; description: string; templateName: string; molecule: Molecule; attachPorts: AttachPort[] }

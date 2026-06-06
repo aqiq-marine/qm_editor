@@ -15,7 +15,7 @@ use crate::domain::{
     FragmentDefinition, MassNumber, TwiceSpin, YoloPlanStep, YoloStepHistoryEntry,
 };
 use crate::fragments;
-use crate::templates;
+use crate::templates::{self, TemplateSummary};
 
 #[derive(Deserialize, Serialize)]
 struct ListTemplatesArgs {}
@@ -219,6 +219,46 @@ pub async fn propose_commands_via_ai(
     match AiProvider::from_env()? {
         AiProvider::GoogleGemini => propose_with_gemini(input, _state, context, screenshot).await,
     }
+}
+
+pub async fn plan_yolo_steps_ai(
+    input: &str,
+    fragments: &[FragmentDefinition],
+    templates: &[TemplateSummary],
+) -> Result<Vec<YoloPlanStep>, String> {
+    let api_key = std::env::var("GEMINI_API_KEY")
+        .or_else(|_| std::env::var("GOOGLE_API_KEY"))
+        .map_err(|_| "Set GEMINI_API_KEY or GOOGLE_API_KEY.".to_string())?;
+    let client = gemini::Client::new(api_key).map_err(|error| error.to_string())?;
+    let model = std::env::var("QM_EDITOR_GEMINI_MODEL")
+        .unwrap_or_else(|_| DEFAULT_GEMINI_MODEL.to_string());
+
+    let prompt = build_planning_prompt(input, fragments, templates);
+
+    let response = client
+        .agent(model)
+        .preamble("You are a molecular modeling agent. Break down the user's request into a sequence of numbered steps (1, 2, ...). Return the plan as a raw JSON array of objects: [{\"id\": 1, \"goal\": \"...\"}, ...]. You MUST return only a valid JSON array, no other text.")
+        .temperature(0.0)
+        .build()
+        .prompt(prompt)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    println!("Gemini planning response: {}", response);
+
+    let json_text = extract_json_object(&response).ok_or_else(|| format!("Failed to extract JSON plan from response: {}", response))?;
+    let plan: Vec<YoloPlanStep> = serde_json::from_str(json_text).map_err(|e| format!("JSON parsing error: {}. Text: {}", e, json_text))?;
+
+    Ok(plan)
+}
+
+fn build_planning_prompt(input: &str, fragments: &[FragmentDefinition], templates: &[TemplateSummary]) -> String {
+    let fragments_text = fragments.iter().map(|f| format!("- {}: {}", f.name, f.description)).collect::<Vec<_>>().join("\n");
+    let templates_text = templates.iter().map(|t| format!("- {}: {}", t.name, t.description)).collect::<Vec<_>>().join("\n");
+
+    format!(
+        "Request: {input}\n\nAvailable Fragments:\n{fragments_text}\n\nAvailable Templates:\n{templates_text}\n\nPlan the steps to fulfill the request using these resources."
+    )
 }
 
 pub fn build_yolo_plan(input: &str) -> Vec<YoloPlanStep> {
@@ -589,6 +629,8 @@ Allowed command types and their fields:
 - PLACE_TEMPLATE: {"type": "PLACE_TEMPLATE", "templateName": string, "position": [x, y, z], "direction": [dx, dy, dz]}
 - ATTACH_FRAGMENT: {"type": "ATTACH_FRAGMENT", "fragmentName": string, "targetAtomId": number, "rotationAngle": number, "orientation": [x, y, z]}
 - SUBSTITUTE_BY_FRAGMENT: {"type": "SUBSTITUTE_BY_FRAGMENT", "fragmentName": string, "startAtomId": number, "endAtomId": number}; startAtomId is the existing atom to remove/replace, endAtomId is the bonded existing atom to keep/connect.
+- UNDO: {"type": "UNDO"} - Undo the last command.
+- REDO: {"type": "REDO"} - Redo the previously undone command.
 
 Use camelCase fields exactly as shown. 
 - Always list available templates/fragments first if the user wants to add/substitute them.
@@ -604,12 +646,14 @@ Use camelCase fields exactly as shown.
 
 fn extract_json_object(text: &str) -> Option<&str> {
     let trimmed = text.trim();
-    if trimmed.starts_with('{') && trimmed.ends_with('}') {
-        return Some(trimmed);
-    }
-
-    let start = trimmed.find('{')?;
-    let end = trimmed.rfind('}')?;
+    // 配列、またはオブジェクトを抽出できるようにする
+    let start = trimmed.find(|c| c == '{' || c == '[')?;
+    let end = if trimmed.as_bytes()[start] == b'{' {
+        trimmed.rfind('}')?
+    } else {
+        trimmed.rfind(']')?
+    };
+    
     (start < end).then(|| &trimmed[start..=end])
 }
 
