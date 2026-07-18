@@ -1,6 +1,6 @@
 use crate::domain::{
-    AiContext, AiResult, AtomIndexMapEntry, AtomSummary, Basis, CalculationSummary, Command, Element,
-    GeometryEditMode, JobType, Method, Solvent,
+    AiContext, AiResult, AtomIndexMapEntry, AtomSummary, Basis, CalculationSummary, Command,
+    Element, GeometryEditMode, JobType, Method, Solvent,
 };
 use crate::functional_groups::{
     element_neighbors, find_all_benzene_rings, get_ring_neighbors, match_functional_groups,
@@ -46,7 +46,7 @@ pub fn build_ai_context(state: &crate::domain::AppState) -> AiContext {
     for m in benzene_matches {
         // m.atom_ids は環の炭素6つ
         let ordered_ring = m.atom_ids.clone(); // 単純化: 順序付けは必須ではない場合もあるが、位置情報に依存するなら必要
-        
+
         for (idx, (_ring_atom_id, neighbors)) in get_ring_neighbors(molecule, &ordered_ring)
             .into_iter()
             .enumerate()
@@ -57,6 +57,16 @@ pub fn build_ai_context(state: &crate::domain::AppState) -> AiContext {
                     .or_default()
                     .push(format!("BenzeneRing_{}th_position", idx + 1));
             }
+        }
+    }
+
+    // 3. 結合が 1 つだけの原子を末端として扱う
+    for atom in &molecule.atoms {
+        if bonded_atom_count(molecule, atom.id) == 1 {
+            atom_to_contexts
+                .entry(atom.id)
+                .or_default()
+                .push("Terminal".to_string());
         }
     }
 
@@ -127,6 +137,14 @@ pub fn build_ai_context(state: &crate::domain::AppState) -> AiContext {
     }
 }
 
+fn bonded_atom_count(molecule: &crate::domain::Molecule, atom_id: u32) -> usize {
+    molecule
+        .bonds
+        .iter()
+        .filter(|bond| bond.atom_ids.contains(&atom_id))
+        .count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,22 +183,65 @@ mod tests {
         let mut state = reducer::initial_app_state();
         // Setup benzoic acid-like structure for testing
         state.domain.chemical_spec.molecule.atoms = vec![
-            crate::domain::Atom { id: 1, element: crate::domain::Element::C, isotope: None, nuclear_spin: None, formal_charge: 0, position: [0.0, 0.0, 0.0] },
-            crate::domain::Atom { id: 2, element: crate::domain::Element::O, isotope: None, nuclear_spin: None, formal_charge: 0, position: [1.2, 0.0, 0.0] },
-            crate::domain::Atom { id: 3, element: crate::domain::Element::O, isotope: None, nuclear_spin: None, formal_charge: 0, position: [0.0, 1.3, 0.0] },
-            crate::domain::Atom { id: 4, element: crate::domain::Element::H, isotope: None, nuclear_spin: None, formal_charge: 0, position: [0.0, 2.2, 0.0] },
+            crate::domain::Atom {
+                id: 1,
+                element: crate::domain::Element::C,
+                isotope: None,
+                nuclear_spin: None,
+                formal_charge: 0,
+                position: [0.0, 0.0, 0.0],
+            },
+            crate::domain::Atom {
+                id: 2,
+                element: crate::domain::Element::O,
+                isotope: None,
+                nuclear_spin: None,
+                formal_charge: 0,
+                position: [1.2, 0.0, 0.0],
+            },
+            crate::domain::Atom {
+                id: 3,
+                element: crate::domain::Element::O,
+                isotope: None,
+                nuclear_spin: None,
+                formal_charge: 0,
+                position: [0.0, 1.3, 0.0],
+            },
+            crate::domain::Atom {
+                id: 4,
+                element: crate::domain::Element::H,
+                isotope: None,
+                nuclear_spin: None,
+                formal_charge: 0,
+                position: [0.0, 2.2, 0.0],
+            },
         ];
         state.domain.chemical_spec.molecule.bonds = vec![
-            crate::domain::Bond { id: 1, atom_ids: [1, 2], order: 2 },
-            crate::domain::Bond { id: 2, atom_ids: [1, 3], order: 1 },
-            crate::domain::Bond { id: 3, atom_ids: [3, 4], order: 1 },
+            crate::domain::Bond {
+                id: 1,
+                atom_ids: [1, 2],
+                order: 2,
+            },
+            crate::domain::Bond {
+                id: 2,
+                atom_ids: [1, 3],
+                order: 1,
+            },
+            crate::domain::Bond {
+                id: 3,
+                atom_ids: [3, 4],
+                order: 1,
+            },
         ];
         state.ui.selected_atoms = vec![1];
-        
+
         let context = build_ai_context(&state);
         let atom = &context.selected_atoms[0];
         assert_eq!(atom.display_index, 1);
-        assert!(atom.chemical_context.as_ref().is_some_and(|fg| fg.contains("CarboxylicAcid")));
+        assert!(atom
+            .chemical_context
+            .as_ref()
+            .is_some_and(|fg| fg.contains("CarboxylicAcid")));
     }
 
     #[test]
@@ -188,58 +249,109 @@ mod tests {
         let mut state = reducer::initial_app_state();
         // Setup methanol: C-O-H
         state.domain.chemical_spec.molecule.atoms = vec![
-            crate::domain::Atom { id: 1, element: crate::domain::Element::C, isotope: None, nuclear_spin: None, formal_charge: 0, position: [0.0, 0.0, 0.0] },
-            crate::domain::Atom { id: 2, element: crate::domain::Element::O, isotope: None, nuclear_spin: None, formal_charge: 0, position: [1.2, 0.0, 0.0] },
-            crate::domain::Atom { id: 3, element: crate::domain::Element::H, isotope: None, nuclear_spin: None, formal_charge: 0, position: [1.2, 0.9, 0.0] },
+            crate::domain::Atom {
+                id: 1,
+                element: crate::domain::Element::C,
+                isotope: None,
+                nuclear_spin: None,
+                formal_charge: 0,
+                position: [0.0, 0.0, 0.0],
+            },
+            crate::domain::Atom {
+                id: 2,
+                element: crate::domain::Element::O,
+                isotope: None,
+                nuclear_spin: None,
+                formal_charge: 0,
+                position: [1.2, 0.0, 0.0],
+            },
+            crate::domain::Atom {
+                id: 3,
+                element: crate::domain::Element::H,
+                isotope: None,
+                nuclear_spin: None,
+                formal_charge: 0,
+                position: [1.2, 0.9, 0.0],
+            },
         ];
         state.domain.chemical_spec.molecule.bonds = vec![
-            crate::domain::Bond { id: 1, atom_ids: [1, 2], order: 1 },
-            crate::domain::Bond { id: 2, atom_ids: [2, 3], order: 1 },
+            crate::domain::Bond {
+                id: 1,
+                atom_ids: [1, 2],
+                order: 1,
+            },
+            crate::domain::Bond {
+                id: 2,
+                atom_ids: [2, 3],
+                order: 1,
+            },
         ];
         state.ui.selected_atoms = vec![3]; // Select H
-        
+
         let context = build_ai_context(&state);
         let h_atom_id = 3;
         // Need to find display index for H atom (id 3)
-        let display_h = context.atom_index_map.iter().find(|e| e.atom_id == h_atom_id).unwrap().display_index;
-        
-        let context_str = context.atom_context_map.get(&display_h).expect("Should have context");
+        let display_h = context
+            .atom_index_map
+            .iter()
+            .find(|e| e.atom_id == h_atom_id)
+            .unwrap()
+            .display_index;
+
+        let context_str = context
+            .atom_context_map
+            .get(&display_h)
+            .expect("Should have context");
         assert!(context_str.contains("In_Alcohol"));
+        assert!(context_str.contains("Terminal"));
     }
 
     fn build_4_hydroxybiphenyl() -> crate::domain::AppState {
-        use crate::reducer::{reduce, initial_app_state};
         use crate::domain::{Command, Element};
+        use crate::reducer::{initial_app_state, reduce};
 
         let state = initial_app_state();
-        let state = reduce(state, Command::SubstituteByFragment { fragment_name: "phenyl".to_string(), start_atom_id: 2, end_atom_id: 1 });
+        let state = reduce(
+            state,
+            Command::SubstituteByFragment {
+                fragment_name: "phenyl".to_string(),
+                start_atom_id: 2,
+                end_atom_id: 1,
+            },
+        );
         let context = build_ai_context(&state);
 
         let para_position = context
             .atom_context_map
             .iter()
-            .find(|(_, v)| **v == "BenzeneRing_4th_position")
+            .find(|(_, v)| v.contains("BenzeneRing_4th_position"))
             .map(|(k, _)| *k)
             .unwrap();
-
 
         let para_position = display_index_to_atom_id(&context, para_position).unwrap();
 
         let para_carbon = infer_substitute_by_fragment_completion(
             &state.domain.chemical_spec.molecule,
-            para_position
+            para_position,
         )
-            .unwrap()
-            .end_atom_id;
+        .unwrap()
+        .end_atom_id;
 
-        reduce(state, Command::SubstituteByFragment { fragment_name: "phenyl".to_string(), start_atom_id: para_position, end_atom_id: para_carbon })
+        reduce(
+            state,
+            Command::SubstituteByFragment {
+                fragment_name: "phenyl".to_string(),
+                start_atom_id: para_position,
+                end_atom_id: para_carbon,
+            },
+        )
     }
 
     #[test]
     fn build_ai_context_includes_biphenyl_context() {
         let state = build_4_hydroxybiphenyl();
         let context = build_ai_context(&state);
-        
+
         let neighbor_contexts = context
             .atom_context_map
             .values()
@@ -523,12 +635,12 @@ fn resolve_command_atom_references(
             atom_ids: resolve_pair(atom_ids, context)?,
             order,
         },
-        Command::AttachFragment {
+        Command::ExtendByFragment {
             fragment_name,
             target_atom_id,
             rotation_angle,
             orientation,
-        } => Command::AttachFragment {
+        } => Command::ExtendByFragment {
             fragment_name,
             target_atom_id: resolve_display_index(context, target_atom_id)?,
             rotation_angle,
@@ -644,7 +756,7 @@ fn dedupe_commands_by_rules(commands: Vec<Command>) -> Vec<Command> {
             | Command::AddBond { .. }
             | Command::DeleteBond { .. }
             | Command::PlaceTemplate { .. }
-            | Command::AttachFragment { .. }
+            | Command::ExtendByFragment { .. }
             | Command::SubstituteByFragment { .. }
             | Command::ReplaceAtom { .. }
             | Command::Undo

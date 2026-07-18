@@ -18,7 +18,7 @@ use ai_commands::{build_ai_context, resolve_atom_references};
 use domain::{
     AiContext, AiProposal, AppState, ChemicalSpec, Command, FragmentDefinition, Molecule,
     SubstituteByFragmentCompletion, ValidationMessage, YoloPlanStep, YoloStepHistoryEntry,
-    YoloStepProposal,
+    YoloStepProposal, PlanEvaluation,
 };
 use fragments::list_available_fragments;
 use functional_groups::{
@@ -170,6 +170,17 @@ async fn plan_yolo_steps_tauri(input: String) -> Result<Vec<YoloPlanStep>, Strin
 
 #[tauri::command]
 #[specta::specta]
+async fn evaluate_plan_tauri(
+    input: String,
+    plan: Vec<YoloPlanStep>,
+    history: Vec<YoloStepHistoryEntry>,
+    state: AppState,
+) -> Result<PlanEvaluation, String> {
+    ai::evaluate_plan_ai(&input, &plan, &history, &state).await
+}
+
+#[tauri::command]
+#[specta::specta]
 async fn propose_yolo_step_tauri(
     input: String,
     state: AppState,
@@ -213,6 +224,7 @@ pub fn run() {
         build_ai_context_tauri,
         propose_commands_via_ai_tauri,
         plan_yolo_steps_tauri,
+        evaluate_plan_tauri,
         propose_yolo_step_tauri
     ]);
 

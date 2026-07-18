@@ -450,7 +450,7 @@ pub enum Command {
         position: [f64; 3],
         direction: [f64; 3],
     },
-    AttachFragment {
+    ExtendByFragment {
         fragment_name: String,
         target_atom_id: u32,
         rotation_angle: f64,
@@ -564,6 +564,14 @@ pub struct AiDiagnostic {
 pub struct AiRepairPolicy {
     pub fix_error: bool,
     pub fix_warning: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanEvaluation {
+    pub is_plan_valid: bool,
+    pub reason: Option<String>,
+    pub updated_plan: Option<Vec<YoloPlanStep>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Type)]

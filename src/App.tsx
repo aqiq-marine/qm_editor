@@ -512,7 +512,7 @@ function TemplateFragmentTools() {
           disabled={!canAttachFragment}
           onClick={() =>
             void dispatchCommand({
-              type: "ATTACH_FRAGMENT",
+              type: "EXTEND_BY_FRAGMENT",
               fragmentName,
               targetAtomId: selected[0],
               rotationAngle: 0,
@@ -779,6 +779,27 @@ function AIAssistant() {
     return canvas?.toDataURL("image/png");
   }
 
+  function shouldAttachYoloScreenshot(input: string) {
+    const normalized = input.toLowerCase();
+    return [
+      "screenshot",
+      "screen shot",
+      "image",
+      "picture",
+      "photo",
+      "visual",
+      "view",
+      "looks like",
+      "see the molecule",
+      "見た目",
+      "画像",
+      "スクリーンショット",
+      "写真",
+      "見えて",
+      "見て",
+    ].some((keyword) => normalized.includes(keyword));
+  }
+
   function generateCommands() {
     if (!state || loading) return;
     setError("");
@@ -820,17 +841,21 @@ function AIAssistant() {
     try {
       const planResult = await commands.planYoloStepsTauri(request);
       if (planResult.status === "error") throw new Error(planResult.error);
-      const plan = planResult.data;
-      const plannedSteps = plan.map((step) => ({ ...step, status: "pending" as const }));
+      let plan = planResult.data;
+      let plannedSteps = plan.map((step) => ({ ...step, status: "pending" as const }));
       setYoloSteps(plannedSteps);
 
       const history: YoloStepHistoryEntry[] = [];
-      for (const step of plan) {
+      const attachScreenshot = shouldAttachYoloScreenshot(request);
+      let stepIndex = 0;
+      
+      while (stepIndex < plan.length) {
+        const step = plan[stepIndex];
         const liveState = useAppStore.getState().state;
         if (!liveState) throw new Error("Editor state is not available.");
 
         const stepPlan = { id: step.id, goal: step.goal };
-        const beforeScreenshot = captureScreenshot();
+        const beforeScreenshot = attachScreenshot ? captureScreenshot() : null;
         setYoloSteps((current) => updateYoloStep(current, step.id, { status: "running", beforeScreenshot }));
 
         const proposalResult = await commands.proposeYoloStepTauri(
@@ -852,13 +877,14 @@ function AIAssistant() {
 
         const afterScreenshot = captureScreenshot();
         const status: YoloStepStatus = proposal.resolvedCommands.length > 0 ? "applied" : "skipped";
-        history.push({
+        const historyEntry = {
           stepId: step.id,
           goal: step.goal,
           status,
           explanation: proposal.explanation,
           commands: proposal.commands,
-        });
+        };
+        history.push(historyEntry);
         setYoloSteps((current) =>
           updateYoloStep(current, step.id, {
             status,
@@ -867,6 +893,29 @@ function AIAssistant() {
             explanation: proposal.explanation,
           }),
         );
+
+        // Adaptive Plan Evaluation
+        const evaluationResult = await commands.evaluatePlanTauri(
+            request,
+            plan,
+            history,
+            useAppStore.getState().state!
+        );
+        if (evaluationResult.status === "error") throw new Error(evaluationResult.error);
+        const evaluation = evaluationResult.data;
+
+        if (!evaluation.isPlanValid) {
+            console.warn("Plan invalidated:", evaluation.reason);
+            if (evaluation.updatedPlan) {
+                plan = evaluation.updatedPlan;
+                // Update UI steps to reflect new plan
+                setYoloSteps((current) => [
+                    ...current,
+                    ...plan.slice(stepIndex + 1).map((s) => ({ ...s, status: "pending" as const }))
+                ]);
+            }
+        }
+        stepIndex++;
       }
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : typeof caught === "string" ? caught : "YOLO mode failed.";

@@ -97,7 +97,7 @@ pub fn vdw_radius(element: Element) -> f64 {
         Element::Cl => 1.75,
         Element::Br => 1.85,
         Element::I => 1.98,
-        _ => 1.70, // Default
+        _ => 1.70,
     }
 }
 
@@ -105,9 +105,10 @@ pub fn repulsion_potential(pos_a: [f64; 3], el_a: Element, pos_b: [f64; 3], el_b
     let r_a = vdw_radius(el_a);
     let r_b = vdw_radius(el_b);
     let dist = distance(pos_a, pos_b);
-    if dist < 0.1 { return 1000.0; } // Avoid division by zero
+    if dist < 0.1 {
+        return 1000.0;
+    }
     let sigma = r_a + r_b;
-    // Simple 1/r^6 repulsion potential
     (sigma / dist).powi(6)
 }
 
@@ -133,11 +134,7 @@ pub fn rotation_from_to(from: [f64; 3], to: [f64; 3]) -> [[f64; 3]; 3] {
 }
 
 pub fn rotate_vec(rotation: [[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
-    [
-        dot(rotation[0], v),
-        dot(rotation[1], v),
-        dot(rotation[2], v),
-    ]
+    [dot(rotation[0], v), dot(rotation[1], v), dot(rotation[2], v)]
 }
 
 pub fn mat_mul(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {

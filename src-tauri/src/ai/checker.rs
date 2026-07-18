@@ -41,7 +41,7 @@ impl Parser {
                         Command::PlaceTemplate { template_name, .. } => {
                             *template_name = template_name.to_lowercase();
                         }
-                        Command::AttachFragment { fragment_name, .. } => {
+                        Command::ExtendByFragment { fragment_name, .. } => {
                             *fragment_name = fragment_name.to_lowercase();
                         }
                         Command::SubstituteByFragment { fragment_name, .. } => {
@@ -85,7 +85,7 @@ impl Validator {
                         errors.push(format!("Template '{}' not found. Please check the spelling or list available templates.", template_name));
                     }
                 }
-                Command::AttachFragment { fragment_name, .. }
+                Command::ExtendByFragment { fragment_name, .. }
                 | Command::SubstituteByFragment { fragment_name, .. } => {
                     if !fragments
                         .iter()
@@ -104,7 +104,7 @@ impl Validator {
                 Command::SetAtomFormalCharge { atom_id, .. } => Some(vec![*atom_id]),
                 Command::DeleteAtom { atom_id } => Some(vec![*atom_id]),
                 Command::AddBond { atom_ids, .. } => Some(atom_ids.to_vec()),
-                Command::AttachFragment { target_atom_id, .. } => Some(vec![*target_atom_id]),
+                Command::ExtendByFragment { target_atom_id, .. } => Some(vec![*target_atom_id]),
                 Command::SubstituteByFragment {
                     start_atom_id,
                     end_atom_id,
@@ -146,7 +146,7 @@ impl Validator {
     }
 }
 
-fn extract_json_object(text: &str) -> Option<&str> {
+pub fn extract_json_object(text: &str) -> Option<&str> {
     let trimmed = text.trim();
     if trimmed.starts_with('{') && trimmed.ends_with('}') {
         return Some(trimmed);

@@ -28,4 +28,5 @@ async-trait = "0.1"
 specta = { version = "=2.0.0-rc.20", features = ["derive"] }
 tauri-specta = { version = "=2.0.0-rc.20", features = ["typescript"] }
 specta-typescript = "=0.0.7"
+tokio = { version = "1", features = ["full"] }
 

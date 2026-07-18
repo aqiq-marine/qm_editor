@@ -169,13 +169,13 @@ pub fn reduce(mut state: AppState, command: Command) -> AppState {
                 direction,
             );
         }
-        Command::AttachFragment {
+        Command::ExtendByFragment {
             fragment_name,
             target_atom_id,
             rotation_angle,
             orientation,
         } => {
-            attach_fragment(
+            extend_by_fragment(
                 &mut state.domain.chemical_spec.molecule,
                 &fragment_name,
                 target_atom_id,
@@ -565,7 +565,7 @@ fn next_bond_id(molecule: &Molecule) -> u32 {
         .saturating_add(1)
 }
 
-fn attach_fragment(
+fn extend_by_fragment(
     molecule: &mut Molecule,
     fragment_name: &str,
     target_atom_id: u32,

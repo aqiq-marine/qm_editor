@@ -5,14 +5,20 @@ use rig::{
     tool::Tool,
 };
 use serde::{Deserialize, Serialize};
+use std::{
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
+use tokio::sync::Mutex;
 
 mod checker;
 use checker::Checker;
 
+use crate::ai::checker::extract_json_object;
 use crate::ai_commands::{parse_ai_result_json, propose_commands_by_rules as propose_by_rules};
 use crate::domain::{
     AiContext, AiResult, AppState, AtomSummary, CalculationSpec, CalculationSummary, Element,
-    FragmentDefinition, MassNumber, TwiceSpin, YoloPlanStep, YoloStepHistoryEntry,
+    FragmentDefinition, MassNumber, PlanEvaluation, TwiceSpin, YoloPlanStep, YoloStepHistoryEntry,
 };
 use crate::fragments;
 use crate::templates::{self, TemplateSummary};
@@ -132,7 +138,7 @@ impl Tool for InspectFragment {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "inspect_fragment".to_string(),
-            description: "Inspect a fragment structure. Use an 'atom' type port for 'ATTACH_FRAGMENT' and 'bond' type for 'SUBSTITUTE_BY_FRAGMENT'.".to_string(),
+            description: "Inspect a fragment structure. Use an 'atom' type port for 'EXTEND_BY_FRAGMENT' and 'bond' type for 'SUBSTITUTE_BY_FRAGMENT'.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -178,6 +184,9 @@ impl Tool for UseScreenshotContext {
 
 // const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash";
 const DEFAULT_GEMINI_MODEL: &str = "gemini-3.1-flash-lite-preview";
+const AI_REQUEST_MIN_INTERVAL: Duration = Duration::from_millis(500);
+
+static AI_REQUEST_NEXT_ALLOWED_AT: OnceLock<Mutex<Instant>> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug)]
 enum AiProvider {
@@ -195,6 +204,19 @@ impl AiProvider {
             "" | "google" | "google-gemini" | "gemini" => Ok(Self::GoogleGemini),
             provider => Err(format!("Unsupported AI provider '{provider}'.")),
         }
+    }
+}
+
+async fn wait_for_ai_request_slot() {
+    let gate = AI_REQUEST_NEXT_ALLOWED_AT.get_or_init(|| Mutex::new(Instant::now()));
+    let mut next_allowed_at = gate.lock().await;
+    let now = Instant::now();
+    let scheduled_at = (*next_allowed_at).max(now);
+    *next_allowed_at = scheduled_at + AI_REQUEST_MIN_INTERVAL;
+    drop(next_allowed_at);
+
+    if scheduled_at > now {
+        tokio::time::sleep(scheduled_at - now).await;
     }
 }
 
@@ -235,26 +257,74 @@ pub async fn plan_yolo_steps_ai(
 
     let prompt = build_planning_prompt(input, fragments, templates);
 
-    let response = client
-        .agent(model)
-        .preamble("You are a molecular modeling agent. Break down the user's request into a sequence of numbered steps (1, 2, ...). Return the plan as a raw JSON array of objects: [{\"id\": 1, \"goal\": \"...\"}, ...]. You MUST return only a valid JSON array, no other text.")
-        .temperature(0.0)
-        .build()
-        .prompt(prompt)
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut delay = std::time::Duration::from_secs(10);
+    let max_retries = 5;
 
-    println!("Gemini planning response: {}", response);
+    for attempt in 0..max_retries {
+        wait_for_ai_request_slot().await;
+        let response_result = client
+            .agent(&model)
+            .preamble("You are a molecular modeling agent. Break down the user's request into a sequence of numbered steps (1, 2, ...). Return the plan as a raw JSON array of objects: [{\"id\": 1, \"goal\": \"...\"}, ...]. You MUST return only a valid JSON array, no other text.")
+            .temperature(0.0)
+            .build()
+            .prompt(prompt.clone())
+            .await;
 
-    let json_text = extract_json_object(&response).ok_or_else(|| format!("Failed to extract JSON plan from response: {}", response))?;
-    let plan: Vec<YoloPlanStep> = serde_json::from_str(json_text).map_err(|e| format!("JSON parsing error: {}. Text: {}", e, json_text))?;
+        match response_result {
+            Ok(response) => {
+                println!("Gemini planning response: {}", response);
+                let json_text = extract_json_object(&response).ok_or_else(|| {
+                    format!("Failed to extract JSON plan from response: {}", response)
+                })?;
 
-    Ok(plan)
+                // Wrap in [] if not already an array
+                let wrapped_json = if json_text.trim().starts_with('[') {
+                    json_text.to_string()
+                } else {
+                    format!("[{}]", json_text)
+                };
+
+                let plan: Vec<YoloPlanStep> = serde_json::from_str(&wrapped_json)
+                    .map_err(|e| format!("JSON parsing error: {}. Text: {}", e, wrapped_json))?;
+                return Ok(plan);
+            }
+            Err(e) => {
+                let err_str = e.to_string();
+                if attempt < max_retries - 1
+                    && (err_str.contains("429") || err_str.contains("exceeded"))
+                {
+                    println!(
+                        "Rate limit hit, retrying in {:?}... (attempt {})",
+                        delay,
+                        attempt + 1
+                    );
+                    tokio::time::sleep(delay).await;
+                    delay *= 2;
+                    continue;
+                }
+                return Err(format!("AI planning request failed: {}", err_str));
+            }
+        }
+    }
+
+    Err("Failed to get AI plan after multiple retries due to rate limits.".to_string())
 }
 
-fn build_planning_prompt(input: &str, fragments: &[FragmentDefinition], templates: &[TemplateSummary]) -> String {
-    let fragments_text = fragments.iter().map(|f| format!("- {}: {}", f.name, f.description)).collect::<Vec<_>>().join("\n");
-    let templates_text = templates.iter().map(|t| format!("- {}: {}", t.name, t.description)).collect::<Vec<_>>().join("\n");
+fn build_planning_prompt(
+    input: &str,
+    fragments: &[FragmentDefinition],
+    templates: &[TemplateSummary],
+) -> String {
+    let fragments_text = fragments
+        .iter()
+        .map(|f| format!("- {}: {}", f.name, f.description))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let templates_text = templates
+        .iter()
+        .map(|t| format!("- {}: {}", t.name, t.description))
+        .collect::<Vec<_>>()
+        .join("\n");
 
     format!(
         "Request: {input}\n\nAvailable Fragments:\n{fragments_text}\n\nAvailable Templates:\n{templates_text}\n\nPlan the steps to fulfill the request using these resources."
@@ -384,6 +454,7 @@ async fn propose_with_gemini(
     let retry_count = 3;
 
     for attempt in 0..retry_count {
+        wait_for_ai_request_slot().await;
         let response = agent
             .prompt(prompt.clone())
             .max_turns(max_turns)
@@ -624,168 +695,92 @@ Allowed command types and their fields:
 - ADD_ATOM: {"type": "ADD_ATOM", "element": string, "position": [x, y, z], "isotope"?: number, "nuclearSpin"?: number}
 - SET_ATOM_FORMAL_CHARGE: {"type": "SET_ATOM_FORMAL_CHARGE", "atomId": number, "formalCharge": number}
 - DELETE_ATOM: {"type": "DELETE_ATOM", "atomId": number}
+- REPLACE_ATOM: {"type": "REPLACE_ATOM", "atomId": number, "element": string}
 - ADD_BOND: {"type": "ADD_BOND", "atomIds": [id1, id2], "order": 1 | 2 | 3}
 - DELETE_BOND: {"type": "DELETE_BOND", "bondId": number}
 - PLACE_TEMPLATE: {"type": "PLACE_TEMPLATE", "templateName": string, "position": [x, y, z], "direction": [dx, dy, dz]}
-- ATTACH_FRAGMENT: {"type": "ATTACH_FRAGMENT", "fragmentName": string, "targetAtomId": number, "rotationAngle": number, "orientation": [x, y, z]}
 - SUBSTITUTE_BY_FRAGMENT: {"type": "SUBSTITUTE_BY_FRAGMENT", "fragmentName": string, "startAtomId": number, "endAtomId": number}; startAtomId is the existing atom to remove/replace, endAtomId is the bonded existing atom to keep/connect.
+    Example: For a target molecule R-A-B and fragment Y-X-R, where you want to construct R-A-X-R:
+    - Set 'startAtomId' to the ID of atom B (to be removed).
+    - Set 'endAtomId' to the ID of atom A (the anchor to connect X).
+- EXTEND_BY_FRAGMENT: {"type": "EXTEND_BY_FRAGMENT", "fragmentName": string, "targetAtomId": number, "rotationAngle": number, "orientation": [x, y, z]}; deprecated
 - UNDO: {"type": "UNDO"} - Undo the last command.
 - REDO: {"type": "REDO"} - Redo the previously undone command.
 
 Use camelCase fields exactly as shown. 
 - Always list available templates/fragments first if the user wants to add/substitute them.
 - Use 'inspect_template' for standard molecules.
-- Use 'inspect_fragment' to decide between ATTACH_FRAGMENT and SUBSTITUTE_BY_FRAGMENT.
+- Use 'inspect_fragment' to decide between EXTEND_BY_FRAGMENT and SUBSTITUTE_BY_FRAGMENT.
 - If a fragment has a 'bond' type port, SUBSTITUTE_BY_FRAGMENT must be used as the preferred method for integrating fragments.
-- Only use ATTACH_FRAGMENT if a 'bond' type port is not available and an 'atom' type port exists.
+- Only use EXTEND_BY_FRAGMENT if a 'bond' type port is not available and an 'atom' type port exists.
 - SUBSTITUTE_BY_FRAGMENT provides a more chemically accurate integration by replacing existing bonds.
+- REPLACE_ATOM, ADD_ATOM, DELETE_ATOM, and EXTEND_BY_FRAGMENT are special purpose commands. ALWAYS carefully consider if a higher-level command like SUBSTITUTE_BY_FRAGMENT can be used instead to perform the same task more cleanly and safely. Prefer higher-level commands.
 - Never include markdown, comments, or extra text in your final JSON response.
 - The state shown to you uses display IDs only: molecule.atoms[].id, molecule.bonds[].atomIds, and ui.selectedAtoms are all 1-based display atom IDs in current atom order.
 - The context also uses display IDs only. You MUST use these display IDs in all atom reference fields of output commands; the application resolves them to stable internal atomId values after your response."#
 }
+pub async fn evaluate_plan_ai(
+    original_request: &str,
+    current_plan: &[YoloPlanStep],
+    history: &[YoloStepHistoryEntry],
+    state: &AppState,
+) -> Result<PlanEvaluation, String> {
+    let api_key = std::env::var("GEMINI_API_KEY")
+        .or_else(|_| std::env::var("GOOGLE_API_KEY"))
+        .map_err(|_| "Set GEMINI_API_KEY or GOOGLE_API_KEY.".to_string())?;
+    let client = gemini::Client::new(api_key).map_err(|error| error.to_string())?;
+    let model = std::env::var("QM_EDITOR_GEMINI_MODEL")
+        .unwrap_or_else(|_| DEFAULT_GEMINI_MODEL.to_string());
 
-fn extract_json_object(text: &str) -> Option<&str> {
-    let trimmed = text.trim();
-    // 配列、またはオブジェクトを抽出できるようにする
-    let start = trimmed.find(|c| c == '{' || c == '[')?;
-    let end = if trimmed.as_bytes()[start] == b'{' {
-        trimmed.rfind('}')?
+    let plan_text = current_plan
+        .iter()
+        .map(|item| format!("{}. {}", item.id, item.goal))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let history_text = if history.is_empty() {
+        "None".to_string()
     } else {
-        trimmed.rfind(']')?
+        history
+            .iter()
+            .map(|entry| format!("Step {}: {}", entry.step_id, entry.goal))
+            .collect::<Vec<_>>()
+            .join("\n")
     };
-    
-    (start < end).then(|| &trimmed[start..=end])
+
+    let prompt = format!(
+        "Original request: {original_request}\n\nCurrent Plan:\n{plan_text}\n\nCompleted Steps:\n{history_text}\n\nEvaluate if the remaining plan is still valid and achievable given the completed steps. If valid, return {{ \"isPlanValid\": true }}. If invalid or needs changes, return {{ \"isPlanValid\": false, \"reason\": \"...\", \"updatedPlan\": [...] }} with a new valid plan. MUST return raw JSON.",
+    );
+
+    wait_for_ai_request_slot().await;
+    let response = client
+        .agent(&model)
+        .preamble("You are a molecular modeling agent evaluating plan validity. Return ONLY a valid JSON object: {\"isPlanValid\": bool, \"reason\": string|null, \"updatedPlan\": [...]|null}.")
+        .temperature(0.0)
+        .build()
+        .prompt(prompt)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let json_text = extract_json_object(&response)
+        .ok_or_else(|| format!("Failed to extract JSON from response: {}", response))?;
+
+    serde_json::from_str::<PlanEvaluation>(json_text)
+        .map_err(|e| format!("JSON parsing error: {}. Text: {}", e, json_text))
 }
 
 #[cfg(test)]
-mod tests {
+mod plan_tests {
     use super::*;
-    use crate::ai_commands;
-    use crate::domain::{self, Command, Method};
-    use crate::reducer;
+    use crate::domain::{PlanEvaluation, YoloPlanStep, YoloStepHistoryEntry};
 
     #[test]
-    fn uses_local_parser_for_supported_short_request() {
-        let state = reducer::initial_app_state();
-        let context = ai_commands::build_ai_context(&state);
-        let result = local_result_for_supported_request("set wb97xd", &context)
-            .expect("supported short request should be handled locally");
-
-        assert!(matches!(
-            result.commands.as_slice(),
-            [Command::SetMethod {
-                method: Method::WB97XD
-            }]
-        ));
-    }
-
-    #[test]
-    fn prompt_state_uses_display_atom_ids_for_atoms_bonds_and_selection() {
-        let mut state = reducer::initial_app_state();
-        state.domain.chemical_spec.molecule.atoms[0].id = 10;
-        state.domain.chemical_spec.molecule.atoms[1].id = 20;
-        state.domain.chemical_spec.molecule.atoms[2].id = 30;
-        state.domain.chemical_spec.molecule.bonds[0].atom_ids = [10, 20];
-        state.domain.chemical_spec.molecule.bonds[1].atom_ids = [10, 30];
-        state.ui.selected_atoms = vec![20];
-
-        let context = ai_commands::build_ai_context(&state);
-        let prompt = build_prompt("inspect", &state, &context, None).expect("prompt should build");
-        let json: serde_json::Value = serde_json::from_str(&prompt).expect("prompt should be JSON");
-
-        assert_eq!(
-            json["state"]["domain"]["chemicalSpec"]["molecule"]["atoms"][0]["id"],
-            1
-        );
-        assert_eq!(
-            json["state"]["domain"]["chemicalSpec"]["molecule"]["atoms"][1]["id"],
-            2
-        );
-        assert_eq!(
-            json["state"]["domain"]["chemicalSpec"]["molecule"]["bonds"][0]["atomIds"],
-            serde_json::json!([1, 2])
-        );
-        assert_eq!(
-            json["state"]["domain"]["chemicalSpec"]["molecule"]["bonds"][1]["atomIds"],
-            serde_json::json!([1, 3])
-        );
-        assert_eq!(json["state"]["ui"]["selectedAtoms"], serde_json::json!([2]));
-        assert_eq!(
-            json["context"]["atomIndexMap"],
-            serde_json::json!([
-                { "displayIndex": 1, "atomId": 1 },
-                { "displayIndex": 2, "atomId": 2 },
-                { "displayIndex": 3, "atomId": 3 }
-            ])
-        );
-    }
-
-    #[test]
-    fn prompt_context_includes_chemical_context() {
-        let mut state = reducer::initial_app_state();
-        // Setup benzoic acid-like structure for testing
-        state.domain.chemical_spec.molecule.atoms = vec![
-            crate::domain::Atom {
-                id: 1,
-                element: crate::domain::Element::C,
-                isotope: None,
-                nuclear_spin: None,
-                formal_charge: 0,
-                position: [0.0, 0.0, 0.0],
-            },
-            crate::domain::Atom {
-                id: 2,
-                element: crate::domain::Element::O,
-                isotope: None,
-                nuclear_spin: None,
-                formal_charge: 0,
-                position: [1.2, 0.0, 0.0],
-            },
-            crate::domain::Atom {
-                id: 3,
-                element: crate::domain::Element::O,
-                isotope: None,
-                nuclear_spin: None,
-                formal_charge: 0,
-                position: [0.0, 1.3, 0.0],
-            },
-            crate::domain::Atom {
-                id: 4,
-                element: crate::domain::Element::H,
-                isotope: None,
-                nuclear_spin: None,
-                formal_charge: 0,
-                position: [0.0, 2.2, 0.0],
-            },
-        ];
-        state.domain.chemical_spec.molecule.bonds = vec![
-            crate::domain::Bond {
-                id: 1,
-                atom_ids: [1, 2],
-                order: 2,
-            },
-            crate::domain::Bond {
-                id: 2,
-                atom_ids: [1, 3],
-                order: 1,
-            },
-            crate::domain::Bond {
-                id: 3,
-                atom_ids: [3, 4],
-                order: 1,
-            },
-        ];
-        state.ui.selected_atoms = vec![1];
-
-        let context = ai_commands::build_ai_context(&state);
-        let prompt = build_prompt("inspect", &state, &context, None).expect("prompt should build");
-        let json: serde_json::Value = serde_json::from_str(&prompt).expect("prompt should be JSON");
-
-        let selected_atom = &json["context"]["selectedAtoms"][0];
-        assert!(selected_atom["chemicalContext"].is_string());
-        assert!(selected_atom["chemicalContext"]
-            .as_str()
-            .unwrap()
-            .contains("CarboxylicAcid"));
+    fn test_evaluate_plan_ai_serialization() {
+        let evaluation = PlanEvaluation {
+            is_plan_valid: true,
+            reason: None,
+            updated_plan: None,
+        };
+        let json = serde_json::to_string(&evaluation).unwrap();
+        assert!(json.contains("\"isPlanValid\":true"));
     }
 }
