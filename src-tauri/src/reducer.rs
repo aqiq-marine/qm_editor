@@ -328,9 +328,67 @@ fn set_dihedral_angle(
     let Some(axis) = normalize(sub(third, second)) else {
         return;
     };
-    let target = add(third, rotate(sub(moving, third), axis, delta));
-    let delta_vec = sub(target, molecule.atoms[moving_index].position);
-    apply_length_or_dihedral_motion(molecule, atom_ids[1], atom_ids[2], delta_vec, mode);
+    // `dihedral_degrees` uses the opposite sign convention from the
+    // right-hand rotation used by `rotate` around the B-C axis.
+    let target = add(third, rotate(sub(moving, third), axis, -delta));
+    match mode {
+        GeometryEditMode::AtomOnly => {
+            molecule.atoms[moving_index].position = target;
+        }
+        GeometryEditMode::MoveOtherSide => {
+            let Some(moving_ids) = connected_component_without_bond(
+                molecule,
+                atom_ids[2],
+                atom_ids[1],
+                [atom_ids[1], atom_ids[2]],
+            ) else {
+                return;
+            };
+            rotate_atoms_about_axis(
+                molecule,
+                &moving_ids,
+                third,
+                axis,
+                -delta,
+            );
+        }
+        GeometryEditMode::MoveBothSides => {
+            let Some(other_side) = connected_component_without_bond(
+                molecule,
+                atom_ids[2],
+                atom_ids[1],
+                [atom_ids[1], atom_ids[2]],
+            ) else {
+                return;
+            };
+            let Some(first_side) = connected_component_without_bond(
+                molecule,
+                atom_ids[1],
+                atom_ids[2],
+                [atom_ids[1], atom_ids[2]],
+            ) else {
+                return;
+            };
+            rotate_atoms_about_axis(molecule, &other_side, third, axis, -delta / 2.0);
+            rotate_atoms_about_axis(molecule, &first_side, third, axis, delta / 2.0);
+        }
+    }
+}
+
+fn rotate_atoms_about_axis(
+    molecule: &mut Molecule,
+    atom_ids: &[u32],
+    origin: [f64; 3],
+    axis: [f64; 3],
+    radians: f64,
+) {
+    for atom_id in atom_ids {
+        let Some(index) = atom_index(molecule, *atom_id) else {
+            continue;
+        };
+        let relative = sub(molecule.atoms[index].position, origin);
+        molecule.atoms[index].position = add(origin, rotate(relative, axis, radians));
+    }
 }
 
 fn apply_length_or_dihedral_motion(
@@ -935,6 +993,99 @@ pub fn substitute_by_fragment(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_molecule(positions: [[f64; 3]; 4]) -> Molecule {
+        Molecule {
+            name: "test".to_string(),
+            atoms: positions
+                .into_iter()
+                .enumerate()
+                .map(|(index, position)| Atom {
+                    id: index as u32 + 1,
+                    element: Element::C,
+                    isotope: None,
+                    nuclear_spin: None,
+                    formal_charge: 0,
+                    position,
+                })
+                .collect(),
+            bonds: vec![
+                Bond { id: 1, atom_ids: [1, 2], order: 1 },
+                Bond { id: 2, atom_ids: [2, 3], order: 1 },
+                Bond { id: 3, atom_ids: [3, 4], order: 1 },
+            ],
+        }
+    }
+
+    #[test]
+    fn set_dihedral_angle_sets_requested_signed_angle() {
+        let mut molecule = test_molecule([
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ]);
+
+        set_dihedral_angle(
+            &mut molecule,
+            [1, 2, 3, 4],
+            90.0,
+            GeometryEditMode::AtomOnly,
+        );
+
+        let positions: Vec<_> = molecule.atoms.iter().map(|atom| atom.position).collect();
+        let actual = dihedral_degrees(positions[0], positions[1], positions[2], positions[3])
+            .expect("dihedral should be defined");
+        assert!((actual - 90.0).abs() < 1e-10, "expected 90°, got {actual}°");
+    }
+
+    #[test]
+    fn set_dihedral_angle_move_other_side_sets_requested_angle() {
+        let mut molecule = test_molecule([
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ]);
+        let first_position = molecule.atoms[0].position;
+        let second_position = molecule.atoms[1].position;
+
+        set_dihedral_angle(
+            &mut molecule,
+            [1, 2, 3, 4],
+            90.0,
+            GeometryEditMode::MoveOtherSide,
+        );
+
+        let positions: Vec<_> = molecule.atoms.iter().map(|atom| atom.position).collect();
+        let actual = dihedral_degrees(positions[0], positions[1], positions[2], positions[3])
+            .expect("dihedral should be defined");
+        assert!((actual - 90.0).abs() < 1e-10, "expected 90°, got {actual}°");
+        assert_eq!(positions[0], first_position);
+        assert_eq!(positions[1], second_position);
+    }
+
+    #[test]
+    fn set_dihedral_angle_move_both_sides_sets_requested_angle() {
+        let mut molecule = test_molecule([
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ]);
+
+        set_dihedral_angle(
+            &mut molecule,
+            [1, 2, 3, 4],
+            90.0,
+            GeometryEditMode::MoveBothSides,
+        );
+
+        let positions: Vec<_> = molecule.atoms.iter().map(|atom| atom.position).collect();
+        let actual = dihedral_degrees(positions[0], positions[1], positions[2], positions[3])
+            .expect("dihedral should be defined");
+        assert!((actual - 90.0).abs() < 1e-10, "expected 90°, got {actual}°");
+    }
 
     fn atom_position_for(state: &AppState, atom_id: u32) -> [f64; 3] {
         state

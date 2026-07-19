@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { createViewer, type AtomSpec, type GLViewer } from "3dmol";
 import "./App.css";
 import { useAppStore } from "./app/store";
-import type { AICommand } from "./domain/commands";
 import {
   commands,
   type Element,
@@ -10,11 +9,11 @@ import {
   type Solvent,
   type ValidationMessage,
   type TemplateSummary,
-  type FragmentDefinition,
   type SubstituteByFragmentCompletion,
   type YoloPlanStep,
-  type YoloStepProposal,
-  type AiResult,
+  type AiProposal,
+  type Command,
+  type YoloStepHistoryEntry,
 } from "./bindings";
 import {
   supportedBases,
@@ -35,7 +34,7 @@ function App() {
 }
 
 function EditorShell() {
-  const { state, loadInitialState } = useAppStore();
+  const { state, loadError, loadInitialState } = useAppStore();
   const [gaussian, setGaussian] = useState("");
   const [messages, setMessages] = useState<ValidationMessage[]>([]);
 
@@ -53,7 +52,17 @@ function EditorShell() {
   if (!state) {
     return (
       <main className="app-shell">
-        <section className="viewer-panel">Loading editor...</section>
+        <section className="viewer-panel">
+          {loadError ? (
+            <div role="alert">
+              <h2>Unable to load the editor</h2>
+              <p>{loadError}</p>
+              <p>Run this application with <code>npm run tauri dev</code>.</p>
+            </div>
+          ) : (
+            "Loading editor..."
+          )}
+        </section>
       </main>
     );
   }
@@ -147,7 +156,7 @@ function MoleculeViewer() {
     viewer.setStyle({}, { stick: { radius: 0.15 }, sphere: { scale: 0.34 } });
 
     molecule.atoms.forEach((atom, index) => {
-      viewer.addLabel(formatAtomLabel(index + 1, atom.formalCharge), {
+      viewer.addLabel(formatAtomLabel(index + 1, atom.formalCharge ?? 0), {
         position: { x: atom.position[0], y: atom.position[1], z: atom.position[2] },
         backgroundColor: "white",
         backgroundOpacity: 0.5,
@@ -166,7 +175,7 @@ function MoleculeViewer() {
     }
     viewer.setClickable({}, true, (atom: AtomSpec) => {
       const atomId = atom.index === undefined ? undefined : molecule.atoms[atom.index]?.id;
-      if (atomId !== undefined) void dispatchCommand({ type: "TOGGLE_ATOM_SELECTION", atomId });
+      if (atomId !== undefined) void dispatchCommand({ type: "TOGGLE_ATOM_SELECTION", atom_id: atomId });
     });
     viewer.zoomTo();
     viewer.render();
@@ -190,14 +199,45 @@ function MoleculeViewer() {
   );
 }
 
+type ToolSection = "calculation" | "molecule" | "templates" | "fragments" | "geometry" | "relaxation" | null;
+
 function CalculationToolbar({ messages }: { messages: ValidationMessage[] }) {
   const { state, dispatchCommand } = useAppStore();
+  const [openSection, setOpenSection] = useState<ToolSection>("calculation");
   if (!state) return null;
   const calculation = state.domain.chemicalSpec.calculation;
 
+  const toggleSection = (section: Exclude<ToolSection, null>) => {
+    setOpenSection((current) => (current === section ? null : section));
+  };
+
   return (
     <section className="toolbar" aria-label="Editor toolbar">
-      <div className="toolbar-section calculation-tools">
+      <div className="toolbar-actions" role="toolbar" aria-label="Editor tools">
+        <button type="button" className={openSection === "calculation" ? "tool-button active" : "tool-button"} onClick={() => toggleSection("calculation")}>
+          Calculation
+        </button>
+        <button type="button" className={openSection === "fragments" ? "tool-button active" : "tool-button"} onClick={() => toggleSection("fragments")}>
+          Fragments
+        </button>
+        <button type="button" className={openSection === "geometry" ? "tool-button active" : "tool-button"} onClick={() => toggleSection("geometry")}>
+          Geometry Edit
+        </button>
+        <button type="button" className={openSection === "relaxation" ? "tool-button active" : "tool-button"} onClick={() => toggleSection("relaxation")}>
+          Relaxation
+        </button>
+        <button type="button" className={openSection === "molecule" ? "tool-button active" : "tool-button"} onClick={() => toggleSection("molecule")}>
+          Molecule Edit
+        </button>
+        <button type="button" className={openSection === "templates" ? "tool-button active" : "tool-button"} onClick={() => toggleSection("templates")}>
+          Templates
+        </button>
+        <button type="button" className={openSection === "geometry" ? "tool-button active" : "tool-button"} onClick={() => toggleSection("geometry")}>
+          Geometry Edit
+        </button>
+      </div>
+
+      {openSection === "calculation" ? <div className="toolbar-section calculation-tools">
         <div className="tool-section-heading">
           <h2>Calculation</h2>
         </div>
@@ -207,7 +247,7 @@ function CalculationToolbar({ messages }: { messages: ValidationMessage[] }) {
             label="Job type"
             value={calculation.jobType}
             options={supportedJobTypes}
-            onChange={(jobType) => void dispatchCommand({ type: "SET_JOB_TYPE", jobType })}
+            onChange={(jobType) => void dispatchCommand({ type: "SET_JOB_TYPE", job_type: jobType })}
           />
           <SelectField
             label="Method"
@@ -228,7 +268,7 @@ function CalculationToolbar({ messages }: { messages: ValidationMessage[] }) {
               onChange={(event) =>
                 void dispatchCommand({
                   type: "SET_SOLVENT",
-                  solvent: event.currentTarget.value ? (event.currentTarget.value as Solvent) : undefined,
+                  solvent: event.currentTarget.value ? (event.currentTarget.value as Solvent) : null,
                 })
               }
             >
@@ -252,13 +292,27 @@ function CalculationToolbar({ messages }: { messages: ValidationMessage[] }) {
             onChange={(multiplicity) => void dispatchCommand({ type: "SET_MULTIPLICITY", multiplicity })}
           />
         </div>
-      </div>
+      </div> : null}
 
-      <MoleculeEditor />
+      {openSection === "molecule" ? <div className="toolbar-section">
+        <MoleculeEditor />
+      </div> : null}
 
-      <TemplateFragmentTools />
+      {openSection === "templates" ? <div className="toolbar-section">
+        <TemplateFragmentTools includeTemplates includeFragments={false} />
+      </div> : null}
 
-      <GeometryEditor />
+      {openSection === "fragments" ? <div className="toolbar-section">
+        <TemplateFragmentTools includeTemplates={false} includeFragments />
+      </div> : null}
+
+      {openSection === "geometry" ? <div className="toolbar-section">
+        <GeometryEditor />
+      </div> : null}
+
+      {openSection === "relaxation" ? <div className="toolbar-section">
+        <RelaxationTools />
+      </div> : null}
 
       <div className="validation-list toolbar-section">
         {messages.length === 0 ? (
@@ -271,8 +325,62 @@ function CalculationToolbar({ messages }: { messages: ValidationMessage[] }) {
           ))
         )}
       </div>
+
     </section>
   );
+}
+
+function RelaxationTools() {
+  const { state, dispatchCommand } = useAppStore();
+  const [frozenAtomIds, setFrozenAtomIds] = useState<number[]>([]);
+  const [running, setRunning] = useState(false);
+  const [message, setMessage] = useState("");
+  if (!state) return null;
+
+  const molecule = state.domain.chemicalSpec.molecule;
+  const selected = state.ui.selectedAtoms;
+  const selectedFrozen = selected.length > 0 && selected.every((id) => frozenAtomIds.includes(id));
+
+  function toggleFreezeSelected() {
+    if (selected.length === 0) return;
+    setFrozenAtomIds((current) => selectedFrozen
+      ? current.filter((id) => !selected.includes(id))
+      : [...new Set([...current, ...selected])]);
+    setMessage("");
+  }
+
+  async function optimize() {
+    if (running || molecule.atoms.length === 0) return;
+    setRunning(true);
+    setMessage("");
+    try {
+      const result = await commands.optimizeMoleculeTauri({ molecule, frozenAtomIds: frozenAtomIds });
+      if (result.status === "error") throw new Error(result.error);
+      await dispatchCommand({ type: "SET_MOLECULE", molecule: result.data.molecule });
+      setMessage(`Completed: ${result.data.iterationCount} iterations${result.data.converged ? ", converged" : ""}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Optimization failed.");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return <div className="relaxation-tools" aria-label="Molecular relaxation tools">
+    <div className="tool-section-heading">
+      <div><h2>Relaxation</h2><p>{frozenAtomIds.length} frozen / {molecule.atoms.length} atoms</p></div>
+      <span>{formatSelectedDisplayAtoms(molecule, selected)}</span>
+    </div>
+    <div className="editor-actions">
+      <button type="button" disabled={selected.length === 0} onClick={toggleFreezeSelected}>
+        {selectedFrozen ? "Unfreeze Selected" : "Freeze Selected"}
+      </button>
+      <button type="button" disabled={running || molecule.atoms.length === 0} onClick={() => void optimize()}>
+        {running ? "Optimizing..." : "Optimize Geometry"}
+      </button>
+    </div>
+    {frozenAtomIds.length > 0 ? <p className="toolbar-help">Frozen atoms: {formatSelectedDisplayAtoms(molecule, frozenAtomIds)}</p> : <p className="toolbar-help">Select atoms in the viewer, then freeze them before optimization.</p>}
+    {message ? <p className="valid">{message}</p> : null}
+  </div>;
 }
 
 function MoleculeEditor() {
@@ -313,14 +421,14 @@ function MoleculeEditor() {
       type: "ADD_ATOM",
       element,
       position: coordinates,
-      isotope: isotope === "" ? undefined : Number(isotope),
-      nuclearSpin: nuclearSpin === "" ? undefined : Number(nuclearSpin),
-      formalCharge: Number(formalCharge),
+      isotope: isotope === "" ? null : Number(isotope),
+      nuclear_spin: nuclearSpin === "" ? null : Number(nuclearSpin),
+      formal_charge: Number(formalCharge),
     });
   }
 
   function deleteSelectedAtoms() {
-    void applyCommands(selected.map((atomId) => ({ type: "DELETE_ATOM", atomId })));
+    void applyCommands(selected.map((atomId) => ({ type: "DELETE_ATOM", atom_id: atomId })));
   }
 
   return (
@@ -367,8 +475,8 @@ function MoleculeEditor() {
             void applyCommands(
               selected.map((atomId) => ({
                 type: "SET_ATOM_FORMAL_CHARGE",
-                atomId,
-                formalCharge: Number(selectedFormalCharge),
+                atom_id: atomId,
+                formal_charge: Number(selectedFormalCharge),
               })),
             )
           }
@@ -389,7 +497,7 @@ function MoleculeEditor() {
           onClick={() =>
             void dispatchCommand({
               type: "ADD_BOND",
-              atomIds: [selected[0], selected[1]],
+              atom_ids: [selected[0], selected[1]],
               order: bondOrder,
             })
           }
@@ -399,7 +507,7 @@ function MoleculeEditor() {
         <button
           type="button"
           disabled={selectedBondIds.length === 0}
-          onClick={() => void applyCommands(selectedBondIds.map((bondId) => ({ type: "DELETE_BOND", bondId })))}
+          onClick={() => void applyCommands(selectedBondIds.map((bondId) => ({ type: "DELETE_BOND", bond_id: bondId })))}
         >
           Delete Selected Bonds
         </button>
@@ -408,7 +516,7 @@ function MoleculeEditor() {
   );
 }
 
-function TemplateFragmentTools() {
+function TemplateFragmentTools({ includeTemplates, includeFragments }: { includeTemplates: boolean; includeFragments: boolean }) {
   const { state, dispatchCommand } = useAppStore();
   const [templates, setTemplates] = useState<TemplateSummary[]>([]);
   const [fragments, setFragments] = useState<FragmentSummary[]>([]);
@@ -459,10 +567,11 @@ function TemplateFragmentTools() {
   return (
     <div className="template-fragment-tools" aria-label="Template and fragment tools">
       <div className="tool-section-heading">
-        <h3>Templates / Fragments</h3>
+        <h3>{includeTemplates ? "Templates / Fragments" : "Fragments"}</h3>
         <span>{formatSelectedDisplayAtoms(state.domain.chemicalSpec.molecule, selected)}</span>
       </div>
 
+      {includeTemplates ? <>
       <div className="template-grid">
         <label>
           Template
@@ -478,6 +587,7 @@ function TemplateFragmentTools() {
         <NumberTextField label="Y" value={y} step="0.001" onChange={setY} />
         <NumberTextField label="Z" value={z} step="0.001" onChange={setZ} />
       </div>
+      </> : null}
 
       <div className="editor-actions">
         <button
@@ -486,7 +596,7 @@ function TemplateFragmentTools() {
           onClick={() =>
             void dispatchCommand({
               type: "PLACE_TEMPLATE",
-              templateName,
+              template_name: templateName,
               position,
               direction: [1, 0, 0],
             })
@@ -496,7 +606,7 @@ function TemplateFragmentTools() {
         </button>
       </div>
 
-      <div className="fragment-actions">
+      {includeFragments ? <div className="fragment-actions">
         <label>
           Fragment
           <select value={fragmentName} onChange={(event) => setFragmentName(event.currentTarget.value)}>
@@ -513,9 +623,9 @@ function TemplateFragmentTools() {
           onClick={() =>
             void dispatchCommand({
               type: "EXTEND_BY_FRAGMENT",
-              fragmentName,
-              targetAtomId: selected[0],
-              rotationAngle: 0,
+              fragment_name: fragmentName,
+              target_atom_id: selected[0],
+              rotation_angle: 0,
               orientation: [1, 0, 0],
             })
           }
@@ -529,15 +639,15 @@ function TemplateFragmentTools() {
             substitutionAtomIds &&
             void dispatchCommand({
               type: "SUBSTITUTE_BY_FRAGMENT",
-              fragmentName,
-              startAtomId: substitutionAtomIds.startAtomId,
-              endAtomId: substitutionAtomIds.endAtomId,
+              fragment_name: fragmentName,
+              start_atom_id: substitutionAtomIds.startAtomId,
+              end_atom_id: substitutionAtomIds.endAtomId,
             })
           }
         >
           Substitute Fragment
         </button>
-      </div>
+      </div> : null}
     </div>
   );
 }
@@ -565,6 +675,30 @@ function GeometryEditor() {
     setDihedralAngle(formatMeasure(dihedralValue));
   }, [molecule, selected]);
 
+  function applyBondLength(value: string) {
+    setBondLength(value);
+    const length = Number(value);
+    if (bondAtomIds && Number.isFinite(length) && length > 0) {
+      void dispatchCommand({ type: "SET_BOND_LENGTH", atom_ids: bondAtomIds, length });
+    }
+  }
+
+  function applyBondAngle(value: string) {
+    setBondAngle(value);
+    const angle = Number(value);
+    if (angleAtomIds && isAngleInput(value)) {
+      void dispatchCommand({ type: "SET_BOND_ANGLE", atom_ids: angleAtomIds, angle });
+    }
+  }
+
+  function applyDihedralAngle(value: string) {
+    setDihedralAngle(value);
+    const angle = Number(value);
+    if (dihedralAtomIds && Number.isFinite(angle)) {
+      void dispatchCommand({ type: "SET_DIHEDRAL_ANGLE", atom_ids: dihedralAtomIds, angle });
+    }
+  }
+
   if (!state) return null;
 
   return (
@@ -583,7 +717,18 @@ function GeometryEditor() {
               min="0.001"
               value={bondLength}
               disabled={selected.length < 2}
-              onChange={(event) => setBondLength(event.currentTarget.value)}
+              onChange={(event) => applyBondLength(event.currentTarget.value)}
+            />
+            <input
+              className="geometry-slider"
+              type="range"
+              min="0.001"
+              max="5"
+              step="0.001"
+              value={Number(bondLength) || 0.001}
+              disabled={selected.length < 2}
+              onChange={(event) => applyBondLength(event.currentTarget.value)}
+              aria-label="Bond length slider"
             />
             <button
               type="button"
@@ -592,7 +737,7 @@ function GeometryEditor() {
                 bondAtomIds &&
                 void dispatchCommand({
                   type: "SET_BOND_LENGTH",
-                  atomIds: bondAtomIds,
+                  atom_ids: bondAtomIds,
                   length: Number(bondLength),
                 })
               }
@@ -611,7 +756,18 @@ function GeometryEditor() {
               max="180"
               value={bondAngle}
               disabled={selected.length < 3}
-              onChange={(event) => setBondAngle(event.currentTarget.value)}
+              onChange={(event) => applyBondAngle(event.currentTarget.value)}
+            />
+            <input
+              className="geometry-slider"
+              type="range"
+              min="0"
+              max="180"
+              step="0.1"
+              value={Number(bondAngle) || 0}
+              disabled={selected.length < 3}
+              onChange={(event) => applyBondAngle(event.currentTarget.value)}
+              aria-label="Bond angle slider"
             />
             <button
               type="button"
@@ -620,7 +776,7 @@ function GeometryEditor() {
                 angleAtomIds &&
                 void dispatchCommand({
                   type: "SET_BOND_ANGLE",
-                  atomIds: angleAtomIds,
+                  atom_ids: angleAtomIds,
                   angle: Number(bondAngle),
                 })
               }
@@ -637,7 +793,18 @@ function GeometryEditor() {
               step="0.1"
               value={dihedralAngle}
               disabled={selected.length < 4}
-              onChange={(event) => setDihedralAngle(event.currentTarget.value)}
+              onChange={(event) => applyDihedralAngle(event.currentTarget.value)}
+            />
+            <input
+              className="geometry-slider"
+              type="range"
+              min="-180"
+              max="180"
+              step="0.1"
+              value={Number(dihedralAngle) || 0}
+              disabled={selected.length < 4}
+              onChange={(event) => applyDihedralAngle(event.currentTarget.value)}
+              aria-label="Dihedral angle slider"
             />
             <button
               type="button"
@@ -646,7 +813,7 @@ function GeometryEditor() {
                 dihedralAtomIds &&
                 void dispatchCommand({
                   type: "SET_DIHEDRAL_ANGLE",
-                  atomIds: dihedralAtomIds,
+                  atom_ids: dihedralAtomIds,
                   angle: Number(dihedralAngle),
                 })
               }
@@ -738,37 +905,20 @@ function NumberTextField({
 
 type YoloStepStatus = "pending" | "running" | "applied" | "skipped" | "failed";
 
-type YoloPlanStep = {
-  id: number;
-  goal: string;
-};
-
 type YoloStep = YoloPlanStep & {
   status: YoloStepStatus;
   prompt?: string;
   beforeScreenshot?: string;
   afterScreenshot?: string;
-  commands?: AICommand[];
+  commands?: Command[];
   explanation?: string;
   error?: string;
-};
-
-type YoloStepHistoryEntry = {
-  stepId: number;
-  goal: string;
-  status: string;
-  explanation: string;
-  commands: AICommand[];
-};
-
-type YoloStepProposal = AIResult & {
-  prompt: string;
 };
 
 function AIAssistant() {
   const { state, applyCommands, undo } = useAppStore();
   const [request, setRequest] = useState("");
-  const [result, setResult] = useState<AIResult | null>(null);
+  const [result, setResult] = useState<AiProposal | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [yoloRunning, setYoloRunning] = useState(false);
@@ -855,7 +1005,7 @@ function AIAssistant() {
         if (!liveState) throw new Error("Editor state is not available.");
 
         const stepPlan = { id: step.id, goal: step.goal };
-        const beforeScreenshot = attachScreenshot ? captureScreenshot() : null;
+        const beforeScreenshot = attachScreenshot ? captureScreenshot() : undefined;
         setYoloSteps((current) => updateYoloStep(current, step.id, { status: "running", beforeScreenshot }));
 
         const proposalResult = await commands.proposeYoloStepTauri(

@@ -479,8 +479,8 @@ pub enum Command {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default, Type)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum GeometryEditMode {
-    #[default]
     AtomOnly,
+    #[default]
     MoveOtherSide,
     MoveBothSides,
 }

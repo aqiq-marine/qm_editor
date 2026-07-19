@@ -2,32 +2,7 @@ export type JobType = "opt" | "freq" | "opt+freq" | "ts";
 export type Method = "B3LYP" | "WB97XD";
 export type Basis = "6-31G(d)" | "def2-SVP" | "def2-TZVP";
 export type Solvent = "THF" | "Water";
-export type Element =
-  | "H"
-  | "He"
-  | "Li"
-  | "Be"
-  | "B"
-  | "C"
-  | "N"
-  | "O"
-  | "F"
-  | "Ne"
-  | "Na"
-  | "Mg"
-  | "Al"
-  | "Si"
-  | "P"
-  | "S"
-  | "Cl"
-  | "Ar"
-  | "K"
-  | "Ca"
-  | "Fe"
-  | "Cu"
-  | "Zn"
-  | "Br"
-  | "I";
+export type Element = import("../bindings").Element;
 
 export type Atom = {
   id: number;

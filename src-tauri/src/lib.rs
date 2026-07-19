@@ -25,6 +25,7 @@ use functional_groups::{
     match_functional_groups, ordered_benzene_ring_carbons, FunctionalGroupMatch,
 };
 use gaussian::render_gaussian;
+use geometry::{optimize_molecule, GeometryOptimizeRequest, GeometryOptimizeResult};
 use parser::parse_molecule_file;
 use reducer::{infer_substitute_by_fragment_completion, initial_app_state, reduce};
 use templates::{list_available_templates, TemplateSummary};
@@ -139,6 +140,14 @@ fn validate_chemical_spec_tauri(spec: ChemicalSpec) -> Vec<ValidationMessage> {
 
 #[tauri::command]
 #[specta::specta]
+fn optimize_molecule_tauri(
+    request: GeometryOptimizeRequest,
+) -> Result<GeometryOptimizeResult, String> {
+    optimize_molecule(request)
+}
+
+#[tauri::command]
+#[specta::specta]
 fn build_ai_context_tauri(state: AppState) -> AiContext {
     build_ai_context(&state)
 }
@@ -221,6 +230,7 @@ pub fn run() {
         parse_molecule_file_tauri,
         render_gaussian_tauri,
         validate_chemical_spec_tauri,
+        optimize_molecule_tauri,
         build_ai_context_tauri,
         propose_commands_via_ai_tauri,
         plan_yolo_steps_tauri,

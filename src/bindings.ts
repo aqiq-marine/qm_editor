@@ -55,6 +55,14 @@ async renderGaussianTauri(spec: ChemicalSpec) : Promise<string> {
 async validateChemicalSpecTauri(spec: ChemicalSpec) : Promise<ValidationMessage[]> {
     return await TAURI_INVOKE("validate_chemical_spec_tauri", { spec });
 },
+async optimizeMoleculeTauri(request: GeometryOptimizeRequest) : Promise<Result<GeometryOptimizeResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("optimize_molecule_tauri", { request }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async buildAiContextTauri(state: AppState) : Promise<AiContext> {
     return await TAURI_INVOKE("build_ai_context_tauri", { state });
 },
@@ -121,6 +129,8 @@ export type FragmentDefinition = { name: string; displayName: string; descriptio
 export type FunctionalGroupKind = "benzeneRing" | "carboxylicAcid" | "sulfonicAcid" | "amide" | "nitrile" | "ester" | "aldehyde" | "ketone" | "alcohol" | "amine" | "alkene" | "alkyne" | "ether" | "halogen" | "nitro"
 export type FunctionalGroupMatch = { kind: FunctionalGroupKind; atomIds: number[]; attachmentAtomId: number | null; referenceAtomId: number | null }
 export type GeometryEditMode = "ATOM_ONLY" | "MOVE_OTHER_SIDE" | "MOVE_BOTH_SIDES"
+export type GeometryOptimizeRequest = { molecule: Molecule; frozenAtomIds: number[] }
+export type GeometryOptimizeResult = { molecule: Molecule; frozenAtomIds: number[]; iterationCount: number; converged: boolean; energyKcalMol: number; warnings: string[] }
 export type JobType = "opt" | "freq" | "opt+freq" | "ts"
 export type MassNumber = number
 export type Method = "B3LYP" | "WB97XD"
