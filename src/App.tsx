@@ -306,9 +306,7 @@ function CalculationToolbar({ messages }: { messages: ValidationMessage[] }) {
         <TemplateFragmentTools includeTemplates={false} includeFragments />
       </div> : null}
 
-      {openSection === "geometry" ? <div className="toolbar-section">
-        <GeometryEditor />
-      </div> : null}
+      {openSection === "geometry" ? <GeometryEditor /> : null}
 
       {openSection === "relaxation" ? <div className="toolbar-section">
         <RelaxationTools />
@@ -657,6 +655,10 @@ function GeometryEditor() {
   const [bondLength, setBondLength] = useState("");
   const [bondAngle, setBondAngle] = useState("");
   const [dihedralAngle, setDihedralAngle] = useState("");
+  const pendingBondLength = useRef<number | null>(null);
+  const bondLengthFrame = useRef<number | null>(null);
+  const [windowPosition, setWindowPosition] = useState({ x: 32, y: 96 });
+  const dragRef = useRef<{ offsetX: number; offsetY: number } | null>(null);
   const molecule = state?.domain.chemicalSpec.molecule;
   const selected = state?.ui.selectedAtoms ?? [];
   const bondAtomIds = selected.length >= 2 ? ([selected[0], selected[1]] as [number, number]) : null;
@@ -679,7 +681,16 @@ function GeometryEditor() {
     setBondLength(value);
     const length = Number(value);
     if (bondAtomIds && Number.isFinite(length) && length > 0) {
-      void dispatchCommand({ type: "SET_BOND_LENGTH", atom_ids: bondAtomIds, length });
+      pendingBondLength.current = length;
+      if (bondLengthFrame.current === null) {
+        bondLengthFrame.current = requestAnimationFrame(() => {
+          bondLengthFrame.current = null;
+          const pendingLength = pendingBondLength.current;
+          pendingBondLength.current = null;
+          if (pendingLength === null || !bondAtomIds) return;
+          void dispatchCommand({ type: "SET_BOND_LENGTH", atom_ids: bondAtomIds, length: pendingLength });
+        });
+      }
     }
   }
 
@@ -699,13 +710,46 @@ function GeometryEditor() {
     }
   }
 
+  function startDragging(event: React.PointerEvent<HTMLDivElement>) {
+    dragRef.current = {
+      offsetX: event.clientX - windowPosition.x,
+      offsetY: event.clientY - windowPosition.y,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function dragWindow(event: React.PointerEvent<HTMLDivElement>) {
+    if (!dragRef.current) return;
+    setWindowPosition({
+      x: Math.max(8, event.clientX - dragRef.current.offsetX),
+      y: Math.max(8, event.clientY - dragRef.current.offsetY),
+    });
+  }
+
+  function stopDragging() {
+    dragRef.current = null;
+  }
+
   if (!state) return null;
 
   return (
-    <div className="geometry-editor" aria-label="Geometry edit menu">
-      <div className="tool-section-heading">
-        <h3>Geometry Edit</h3>
-        <span>Select 2, 3, or 4 atoms in order</span>
+    <div
+      className="geometry-window"
+      style={{ left: windowPosition.x, top: windowPosition.y }}
+      aria-label="Geometry edit window"
+    >
+      <div
+        className="geometry-window-heading"
+        onPointerDown={startDragging}
+        onPointerMove={dragWindow}
+        onPointerUp={stopDragging}
+        onPointerCancel={stopDragging}
+      >
+        <div>
+          <h3>Geometry Edit</h3>
+          <span>Select 2, 3, or 4 atoms in order</span>
+        </div>
+        <span className="geometry-drag-hint">Drag to move</span>
       </div>
       <div className="geometry-grid">
         <label>

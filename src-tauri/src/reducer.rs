@@ -305,6 +305,7 @@ fn set_dihedral_angle(
     angle: f64,
     mode: GeometryEditMode,
 ) {
+    let mut component_cache = ComponentCache::new(molecule);
     if !angle.is_finite() {
         return;
     }
@@ -338,6 +339,7 @@ fn set_dihedral_angle(
         GeometryEditMode::MoveOtherSide => {
             let Some(moving_ids) = connected_component_without_bond(
                 molecule,
+                &mut component_cache,
                 atom_ids[2],
                 atom_ids[1],
                 [atom_ids[1], atom_ids[2]],
@@ -355,6 +357,7 @@ fn set_dihedral_angle(
         GeometryEditMode::MoveBothSides => {
             let Some(other_side) = connected_component_without_bond(
                 molecule,
+                &mut component_cache,
                 atom_ids[2],
                 atom_ids[1],
                 [atom_ids[1], atom_ids[2]],
@@ -363,6 +366,7 @@ fn set_dihedral_angle(
             };
             let Some(first_side) = connected_component_without_bond(
                 molecule,
+                &mut component_cache,
                 atom_ids[1],
                 atom_ids[2],
                 [atom_ids[1], atom_ids[2]],
@@ -398,6 +402,7 @@ fn apply_length_or_dihedral_motion(
     delta: [f64; 3],
     mode: GeometryEditMode,
 ) {
+    let mut component_cache = ComponentCache::new(molecule);
     match mode {
         GeometryEditMode::AtomOnly => {
             if let Some(second_idx) = atom_index(molecule, second_atom) {
@@ -408,6 +413,7 @@ fn apply_length_or_dihedral_motion(
         GeometryEditMode::MoveOtherSide => {
             let Some(moving_ids) = connected_component_without_bond(
                 molecule,
+                &mut component_cache,
                 second_atom,
                 first_atom,
                 [first_atom, second_atom],
@@ -419,6 +425,7 @@ fn apply_length_or_dihedral_motion(
         GeometryEditMode::MoveBothSides => {
             let Some(second_side) = connected_component_without_bond(
                 molecule,
+                &mut component_cache,
                 second_atom,
                 first_atom,
                 [first_atom, second_atom],
@@ -427,6 +434,7 @@ fn apply_length_or_dihedral_motion(
             };
             let Some(first_side) = connected_component_without_bond(
                 molecule,
+                &mut component_cache,
                 first_atom,
                 second_atom,
                 [first_atom, second_atom],
@@ -447,6 +455,16 @@ fn apply_angle_motion(
     delta: [f64; 3],
     mode: GeometryEditMode,
 ) {
+    let mut component_cache = ComponentCache::new(molecule);
+    let Some(center_position) = atom_position(molecule, center_atom) else {
+        return;
+    };
+    let Some(moving_position) = atom_position(molecule, moving_atom) else {
+        return;
+    };
+    let old_vector = sub(moving_position, center_position);
+    let new_vector = add(old_vector, delta);
+    let (rotation_axis, rotation_angle) = rotation_between(old_vector, new_vector);
     match mode {
         GeometryEditMode::AtomOnly => {
             if let Some(moving_idx) = atom_index(molecule, moving_atom) {
@@ -457,17 +475,25 @@ fn apply_angle_motion(
         GeometryEditMode::MoveOtherSide => {
             let Some(moving_ids) = connected_component_without_bond(
                 molecule,
+                &mut component_cache,
                 moving_atom,
                 center_atom,
                 [center_atom, moving_atom],
             ) else {
                 return;
             };
-            translate_atoms(molecule, &moving_ids, delta);
+            rotate_atoms_about_axis(
+                molecule,
+                &moving_ids,
+                center_position,
+                rotation_axis,
+                rotation_angle,
+            );
         }
         GeometryEditMode::MoveBothSides => {
             let Some(moving_side) = connected_component_without_bond(
                 molecule,
+                &mut component_cache,
                 moving_atom,
                 center_atom,
                 [center_atom, moving_atom],
@@ -476,16 +502,42 @@ fn apply_angle_motion(
             };
             let Some(fixed_side) = connected_component_without_bond(
                 molecule,
+                &mut component_cache,
                 fixed_atom,
                 center_atom,
                 [center_atom, fixed_atom],
             ) else {
                 return;
             };
-            translate_atoms(molecule, &moving_side, scale(delta, 0.5));
-            translate_atoms(molecule, &fixed_side, scale(delta, -0.5));
+            rotate_atoms_about_axis(
+                molecule,
+                &moving_side,
+                center_position,
+                rotation_axis,
+                rotation_angle / 2.0,
+            );
+            rotate_atoms_about_axis(
+                molecule,
+                &fixed_side,
+                center_position,
+                rotation_axis,
+                -rotation_angle / 2.0,
+            );
         }
     }
+}
+
+fn rotation_between(from: [f64; 3], to: [f64; 3]) -> ([f64; 3], f64) {
+    let axis = [
+        from[1] * to[2] - from[2] * to[1],
+        from[2] * to[0] - from[0] * to[2],
+        from[0] * to[1] - from[1] * to[0],
+    ];
+    let axis_length = length(axis);
+    if axis_length <= f64::EPSILON {
+        return (perpendicular(from), 0.0);
+    }
+    (scale(axis, 1.0 / axis_length), axis_length.atan2(dot(from, to)))
 }
 
 fn translate_atoms(molecule: &mut Molecule, atom_ids: &[u32], delta: [f64; 3]) {
@@ -497,11 +549,15 @@ fn translate_atoms(molecule: &mut Molecule, atom_ids: &[u32], delta: [f64; 3]) {
 }
 
 fn connected_component_without_bond(
-    molecule: &Molecule,
+    _molecule: &Molecule,
+    cache: &mut ComponentCache,
     start: u32,
     blocked: u32,
     blocked_bond: [u32; 2],
 ) -> Option<Vec<u32>> {
+    if let Some(result) = cache.results.get(&(start, blocked_bond)) {
+        return result.clone();
+    }
     use std::collections::{HashSet, VecDeque};
     let mut visited: HashSet<u32> = HashSet::new();
     let mut queue = VecDeque::new();
@@ -509,26 +565,37 @@ fn connected_component_without_bond(
     queue.push_back(start);
 
     while let Some(current) = queue.pop_front() {
-        for bond in &molecule.bonds {
-            if crate::domain::same_bond(bond.atom_ids, blocked_bond) {
+        for &next in cache.adjacency.get(&current).into_iter().flatten() {
+            if crate::domain::same_bond([current, next], blocked_bond) {
                 continue;
             }
-            let next = if bond.atom_ids[0] == current {
-                bond.atom_ids[1]
-            } else if bond.atom_ids[1] == current {
-                bond.atom_ids[0]
-            } else {
-                continue;
-            };
             if visited.insert(next) {
                 queue.push_back(next);
             }
         }
     }
-    if visited.contains(&blocked) {
+    let result = if visited.contains(&blocked) {
         None
     } else {
         Some(visited.into_iter().collect())
+    };
+    cache.results.insert((start, blocked_bond), result.clone());
+    result
+}
+
+struct ComponentCache {
+    adjacency: std::collections::HashMap<u32, Vec<u32>>,
+    results: std::collections::HashMap<(u32, [u32; 2]), Option<Vec<u32>>>,
+}
+
+impl ComponentCache {
+    fn new(molecule: &Molecule) -> Self {
+        let mut adjacency: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
+        for bond in &molecule.bonds {
+            adjacency.entry(bond.atom_ids[0]).or_default().push(bond.atom_ids[1]);
+            adjacency.entry(bond.atom_ids[1]).or_default().push(bond.atom_ids[0]);
+        }
+        Self { adjacency, results: std::collections::HashMap::new() }
     }
 }
 

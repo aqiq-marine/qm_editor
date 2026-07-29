@@ -265,6 +265,43 @@ h2 {
   padding-left: 12px;
 }
 
+.geometry-window {
+  background: #fff;
+  border: 1px solid #a8b2bf;
+  border-radius: 10px;
+  box-shadow: 0 18px 50px rgba(23, 32, 51, 0.24);
+  max-height: min(90vh, 760px);
+  overflow: auto;
+  padding: 16px;
+  position: fixed;
+  width: min(560px, calc(100vw - 32px));
+  z-index: 20;
+}
+
+.geometry-window-heading {
+  align-items: center;
+  cursor: move;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  touch-action: none;
+  user-select: none;
+}
+
+.geometry-window-heading h3 {
+  margin: 0;
+}
+
+.geometry-window-heading span {
+  color: #647181;
+  font-size: 12px;
+}
+
+.geometry-drag-hint {
+  color: #8a96a5 !important;
+  font-size: 11px !important;
+}
+
 .geometry-slider {
   accent-color: #516b8f;
   min-width: 100px;
