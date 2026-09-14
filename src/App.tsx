@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createViewer, type AtomSpec, type GLViewer } from "3dmol";
 import "./App.css";
+import { applyRigidPreview, dihedralPreviewPlan } from "./geometry/preview";
 import { useAppStore } from "./app/store";
 import {
   commands,
@@ -134,9 +135,9 @@ function ImportControl() {
 }
 
 function MoleculeViewer() {
-  const { state, dispatchCommand } = useAppStore();
+  const { state, previewMolecule, dispatchCommand } = useAppStore();
   if (!state) return null;
-  const { molecule } = state.domain.chemicalSpec;
+  const molecule = previewMolecule ?? state.domain.chemicalSpec.molecule;
   const selected = state.ui.selectedAtoms;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<GLViewer | null>(null);
@@ -651,10 +652,11 @@ function TemplateFragmentTools({ includeTemplates, includeFragments }: { include
 }
 
 function GeometryEditor() {
-  const { state, dispatchCommand } = useAppStore();
+  const { state, dispatchCommand, setPreviewMolecule } = useAppStore();
   const [bondLength, setBondLength] = useState("");
   const [bondAngle, setBondAngle] = useState("");
   const [dihedralAngle, setDihedralAngle] = useState("");
+  const [dihedralPlan, setDihedralPlan] = useState<import("./bindings").GeometryEditPlan | null>(null);
   const pendingBondLength = useRef<number | null>(null);
   const bondLengthFrame = useRef<number | null>(null);
   const [windowPosition, setWindowPosition] = useState({ x: 32, y: 96 });
@@ -665,6 +667,18 @@ function GeometryEditor() {
   const angleAtomIds = selected.length >= 3 ? ([selected[0], selected[1], selected[2]] as [number, number, number]) : null;
   const dihedralAtomIds =
     selected.length >= 4 ? ([selected[0], selected[1], selected[2], selected[3]] as [number, number, number, number]) : null;
+
+  useEffect(() => {
+    if (!molecule || !dihedralAtomIds) {
+      setDihedralPlan(null);
+      setPreviewMolecule(null);
+      return;
+    }
+    void commands.prepareDihedralEditTauri(molecule, dihedralAtomIds, "MOVE_OTHER_SIDE")
+      .then((result) => setDihedralPlan(result.status === "ok" ? result.data : null))
+      .catch(() => setDihedralPlan(null));
+    return () => setPreviewMolecule(null);
+  }, [molecule, selected.join(","), setPreviewMolecule]);
 
   useEffect(() => {
     if (!molecule) return;
@@ -706,7 +720,12 @@ function GeometryEditor() {
     setDihedralAngle(value);
     const angle = Number(value);
     if (dihedralAtomIds && Number.isFinite(angle)) {
-      void dispatchCommand({ type: "SET_DIHEDRAL_ANGLE", atom_ids: dihedralAtomIds, angle });
+      if (molecule) {
+        const fallbackInitial = measureDihedralAngle(molecule, ...dihedralAtomIds) ?? angle;
+        const fallbackPlan = dihedralPreviewPlan(molecule, dihedralAtomIds, fallbackInitial);
+        const plan = dihedralPlan ?? fallbackPlan;
+        if (plan) setPreviewMolecule(applyRigidPreview(molecule, plan, angle));
+      }
     }
   }
 
@@ -859,6 +878,7 @@ function GeometryEditor() {
                   type: "SET_DIHEDRAL_ANGLE",
                   atom_ids: dihedralAtomIds,
                   angle: Number(dihedralAngle),
+                  mode: "MOVE_OTHER_SIDE",
                 })
               }
             >

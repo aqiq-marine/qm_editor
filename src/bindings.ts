@@ -29,6 +29,14 @@ async getStateTauri() : Promise<AppState> {
 async applyCommandTauri(command: Command) : Promise<AppState> {
     return await TAURI_INVOKE("apply_command_tauri", { command });
 },
+async prepareDihedralEditTauri(molecule: Molecule, atomIds: [number, number, number, number], mode: GeometryEditMode) : Promise<Result<GeometryEditPlan, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("prepare_dihedral_edit_tauri", { molecule, atomIds, mode }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async undoTauri() : Promise<AppState> {
     return await TAURI_INVOKE("undo_tauri");
 },
@@ -129,6 +137,7 @@ export type FragmentDefinition = { name: string; displayName: string; descriptio
 export type FunctionalGroupKind = "benzeneRing" | "carboxylicAcid" | "sulfonicAcid" | "amide" | "nitrile" | "ester" | "aldehyde" | "ketone" | "alcohol" | "amine" | "alkene" | "alkyne" | "ether" | "halogen" | "nitro"
 export type FunctionalGroupMatch = { kind: FunctionalGroupKind; atomIds: number[]; attachmentAtomId: number | null; referenceAtomId: number | null }
 export type GeometryEditMode = "ATOM_ONLY" | "MOVE_OTHER_SIDE" | "MOVE_BOTH_SIDES"
+export type GeometryEditPlan = { movingAtomIds: number[]; pivot: [number, number, number]; axis: [number, number, number] | null; initialValue: number | null }
 export type GeometryOptimizeRequest = { molecule: Molecule; frozenAtomIds: number[] }
 export type GeometryOptimizeResult = { molecule: Molecule; frozenAtomIds: number[]; iterationCount: number; converged: boolean; energyKcalMol: number; warnings: string[] }
 export type JobType = "opt" | "freq" | "opt+freq" | "ts"

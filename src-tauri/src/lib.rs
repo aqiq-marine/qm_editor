@@ -27,7 +27,7 @@ use functional_groups::{
 use gaussian::render_gaussian;
 use geometry::{optimize_molecule, GeometryOptimizeRequest, GeometryOptimizeResult};
 use parser::parse_molecule_file;
-use reducer::{infer_substitute_by_fragment_completion, initial_app_state, reduce};
+use reducer::{infer_substitute_by_fragment_completion, initial_app_state, prepare_dihedral_edit, reduce};
 use templates::{list_available_templates, TemplateSummary};
 use validation::validate_chemical_spec;
 
@@ -140,6 +140,16 @@ fn validate_chemical_spec_tauri(spec: ChemicalSpec) -> Vec<ValidationMessage> {
 
 #[tauri::command]
 #[specta::specta]
+fn prepare_dihedral_edit_tauri(
+    molecule: domain::Molecule,
+    atom_ids: [u32; 4],
+    mode: domain::GeometryEditMode,
+) -> Result<reducer::GeometryEditPlan, String> {
+    prepare_dihedral_edit(&molecule, atom_ids, mode)
+}
+
+#[tauri::command]
+#[specta::specta]
 fn optimize_molecule_tauri(
     request: GeometryOptimizeRequest,
 ) -> Result<GeometryOptimizeResult, String> {
@@ -223,6 +233,7 @@ pub fn run() {
         ordered_benzene_ring_carbons_tauri,
         get_state_tauri,
         apply_command_tauri,
+        prepare_dihedral_edit_tauri,
         undo_tauri,
         redo_tauri,
         apply_command,

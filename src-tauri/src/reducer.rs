@@ -7,6 +7,49 @@ use crate::geometry::{
     rotation_from_to, scale, sub,
 };
 use crate::templates;
+use serde::Serialize;
+use specta::Type;
+
+#[derive(Clone, Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GeometryEditPlan {
+    pub moving_atom_ids: Vec<u32>,
+    pub pivot: [f64; 3],
+    pub axis: Option<[f64; 3]>,
+    pub initial_value: Option<f64>,
+}
+
+pub fn prepare_dihedral_edit(
+    molecule: &Molecule,
+    atom_ids: [u32; 4],
+    mode: GeometryEditMode,
+) -> Result<GeometryEditPlan, String> {
+    let first = atom_position(molecule, atom_ids[0]).ok_or("first atom not found")?;
+    let second = atom_position(molecule, atom_ids[1]).ok_or("second atom not found")?;
+    let third = atom_position(molecule, atom_ids[2]).ok_or("third atom not found")?;
+    let fourth = atom_position(molecule, atom_ids[3]).ok_or("fourth atom not found")?;
+    let axis = normalize(sub(third, second)).ok_or("dihedral axis is degenerate")?;
+    let initial_value = dihedral_degrees(first, second, third, fourth);
+    let mut cache = ComponentCache::new(molecule);
+    let moving_atom_ids = match mode {
+        GeometryEditMode::AtomOnly => vec![atom_ids[3]],
+        GeometryEditMode::MoveOtherSide => connected_component_without_bond(
+            molecule, &mut cache, atom_ids[3], atom_ids[2], [atom_ids[1], atom_ids[2]],
+        ).ok_or("could not resolve moving component")?,
+        GeometryEditMode::MoveBothSides => {
+            let mut ids = connected_component_without_bond(
+                molecule, &mut cache, atom_ids[3], atom_ids[2], [atom_ids[1], atom_ids[2]],
+            ).ok_or("could not resolve moving component")?;
+            ids.extend(connected_component_without_bond(
+                molecule, &mut cache, atom_ids[0], atom_ids[1], [atom_ids[1], atom_ids[2]],
+            ).ok_or("could not resolve fixed-side component")?);
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        }
+    };
+    Ok(GeometryEditPlan { moving_atom_ids, pivot: third, axis: Some(axis), initial_value })
+}
 
 pub fn initial_app_state() -> AppState {
     AppState {

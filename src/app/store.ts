@@ -1,9 +1,11 @@
 import { create } from "zustand";
-import { type AppState, type Command } from "../bindings";
+import { type AppState, type Command, type Molecule } from "../bindings";
 import { commands } from "../bindings";
 
 type AppStore = {
   state: AppState | null;
+  previewMolecule: Molecule | null;
+  setPreviewMolecule: (molecule: Molecule | null) => void;
   loadError: string | null;
   loadInitialState: () => Promise<void>;
   dispatchCommand: (command: Command) => Promise<void>;
@@ -26,11 +28,13 @@ function toTauriCommand(command: Command): Command {
 
 export const useAppStore = create<AppStore>((set) => ({
   state: null,
+  previewMolecule: null,
+  setPreviewMolecule: (molecule) => set({ previewMolecule: molecule }),
   loadError: null,
   loadInitialState: async () => {
     try {
       const state = await commands.getStateTauri();
-      set({ state, loadError: null });
+      set({ state, previewMolecule: null, loadError: null });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       set({ loadError: message });
@@ -38,7 +42,7 @@ export const useAppStore = create<AppStore>((set) => ({
   },
   dispatchCommand: async (command) => {
     const nextState = await commands.applyCommandTauri(toTauriCommand(command));
-    set({ state: nextState });
+    set({ state: nextState, previewMolecule: null });
   },
   applyCommands: async (cmds) => {
     let nextState = null;
@@ -46,15 +50,15 @@ export const useAppStore = create<AppStore>((set) => ({
       nextState = await commands.applyCommandTauri(toTauriCommand(command));
     }
     if (nextState) {
-      set({ state: nextState });
+      set({ state: nextState, previewMolecule: null });
     }
   },
   undo: async () => {
     const nextState = await commands.undoTauri();
-    set({ state: nextState });
+      set({ state: nextState, previewMolecule: null });
   },
   redo: async () => {
     const nextState = await commands.redoTauri();
-    set({ state: nextState });
+    set({ state: nextState, previewMolecule: null });
   },
 }));
